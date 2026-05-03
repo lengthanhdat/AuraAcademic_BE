@@ -65,10 +65,9 @@ public class AIController {
         }
 
         // 2. Tạo AiJob với trạng thái PROCESSING và lưu vào MongoDB
-        AiJob job = AiJob.builder()
-            .status("PROCESSING")
-            .createdAt(System.currentTimeMillis())
-            .build();
+        AiJob job = new AiJob();
+        job.setStatus("PROCESSING");
+        job.setCreatedAt(System.currentTimeMillis());
         job = aiJobRepository.save(job);
         final String jobId = job.getId();
         log.info("[API] Đã tạo AiJob [{}] — bắt đầu xử lý async", jobId);
