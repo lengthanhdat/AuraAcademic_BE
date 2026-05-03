@@ -7,11 +7,11 @@ node_modules/
 coverage
 
 # next.js
-frontend/.next/
-frontend/out/
+.next/
+out/
 
 # production
-frontend/build
+build
 
 # misc
 .DS_Store
@@ -33,19 +33,19 @@ yarn-error.log*
 next-env.d.ts
 
 # Java (Backend)
-backend/target/
-backend/.mvn/
-backend/.idea/
-backend/*.iml
-backend/*.log
+target/
+.mvn/
+.idea/
+*.iml
+*.log
 
 # Python (AI Service)
-ai-service/venv/
-ai-service/.venv/
-ai-service/__pycache__/
-ai-service/*.pyc
-ai-service/videos/
-ai-service/logs/
+venv/
+.venv/
+__pycache__/
+*.pyc
+videos/
+logs/
 
 # IDEs
 .vscode/
