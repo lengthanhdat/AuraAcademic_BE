@@ -24,10 +24,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
     private final UserRepository userRepository;
+    private final com.auracademic.backend.service.SettingService settingService;
 
-    public JwtAuthFilter(JwtTokenProvider jwtTokenProvider, UserRepository userRepository) {
+    public JwtAuthFilter(JwtTokenProvider jwtTokenProvider, UserRepository userRepository, com.auracademic.backend.service.SettingService settingService) {
         this.jwtTokenProvider = jwtTokenProvider;
         this.userRepository = userRepository;
+        this.settingService = settingService;
     }
 
 
@@ -51,6 +53,20 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 log.error("Không thể xác thực JWT token: {}", e.getMessage());
             }
         }
+        if (settingService.getBoolean("maintenance_mode", false)) {
+            var auth = SecurityContextHolder.getContext().getAuthentication();
+            boolean isAdmin = auth != null && auth.getAuthorities().stream()
+                    .anyMatch(a -> a.getAuthority().equalsIgnoreCase("ROLE_ADMIN"));
+            
+            String path = request.getRequestURI();
+            if (!isAdmin && !path.startsWith("/api/auth/")) {
+                response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+                response.setContentType("application/json;charset=UTF-8");
+                response.getWriter().write("{\"error\":\"Hệ thống đang bảo trì\"}");
+                return;
+            }
+        }
+        
         filterChain.doFilter(request, response);
     }
 

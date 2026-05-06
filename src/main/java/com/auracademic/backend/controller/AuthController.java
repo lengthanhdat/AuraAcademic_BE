@@ -49,8 +49,14 @@ public class AuthController {
 
     /** POST /api/auth/refresh */
     @PostMapping("/refresh")
-    public ResponseEntity<AuthResponse> refresh(@Valid @RequestBody RefreshTokenRequest request) {
-        return ResponseEntity.ok(authService.refreshToken(request.getRefreshToken()));
+    public ResponseEntity<AuthResponse> refresh(
+            @Valid @RequestBody RefreshTokenRequest request,
+            HttpServletRequest httpRequest) {
+        return ResponseEntity.ok(authService.refreshToken(
+                request.getRefreshToken(), 
+                getClientIp(httpRequest), 
+                httpRequest.getHeader("User-Agent")
+        ));
     }
 
     // ─── Logout ───────────────────────────────────────────────────────────────

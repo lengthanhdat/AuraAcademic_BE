@@ -22,6 +22,7 @@ public class RefreshToken {
     private LocalDateTime createdAt = LocalDateTime.now();
 
     private String deviceInfo;
+    private String ipAddress;
 
     public boolean isExpired() {
         return LocalDateTime.now().isAfter(expiresAt);
@@ -73,5 +74,13 @@ public class RefreshToken {
 
     public void setDeviceInfo(String deviceInfo) {
         this.deviceInfo = deviceInfo;
+    }
+
+    public String getIpAddress() {
+        return ipAddress;
+    }
+
+    public void setIpAddress(String ipAddress) {
+        this.ipAddress = ipAddress;
     }
 }
