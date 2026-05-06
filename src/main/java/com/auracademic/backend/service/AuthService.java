@@ -36,8 +36,9 @@ public class AuthService {
     private final TwoFactorService twoFactorService;
     private final AuditLogService auditLogService;
     private final UserMapper userMapper;
+    private final SettingService settingService;
 
-    public AuthService(UserRepository userRepository, RefreshTokenRepository refreshTokenRepository, JwtTokenProvider jwtTokenProvider, PasswordEncoder passwordEncoder, EmailService emailService, TwoFactorService twoFactorService, AuditLogService auditLogService, UserMapper userMapper) {
+    public AuthService(UserRepository userRepository, RefreshTokenRepository refreshTokenRepository, JwtTokenProvider jwtTokenProvider, PasswordEncoder passwordEncoder, EmailService emailService, TwoFactorService twoFactorService, AuditLogService auditLogService, UserMapper userMapper, SettingService settingService) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.jwtTokenProvider = jwtTokenProvider;
@@ -46,6 +47,7 @@ public class AuthService {
         this.twoFactorService = twoFactorService;
         this.auditLogService = auditLogService;
         this.userMapper = userMapper;
+        this.settingService = settingService;
     }
 
 
@@ -100,6 +102,10 @@ public class AuthService {
         // Kiểm tra account lock
         checkAccountLock(user);
 
+        if (settingService.getBoolean("maintenance_mode", false) && !"admin".equals(user.getRole())) {
+            throw new AuthException("Hệ thống đang bảo trì, vui lòng quay lại sau.");
+        }
+
         // Kiểm tra email verified
         if (!user.isEmailVerified()) {
             throw new AuthException("Tài khoản chưa được xác thực email. Vui lòng kiểm tra hộp thư của bạn.");
@@ -131,13 +137,13 @@ public class AuthService {
 
         auditLogService.log(user.getId(), user.getEmail(), "LOGIN", ipAddress, userAgent, true, null);
 
-        return buildAuthResponse(user);
+        return buildAuthResponse(user, ipAddress, userAgent);
     }
 
     // ─── Refresh Token ────────────────────────────────────────────────────────
 
     @Transactional
-    public AuthResponse refreshToken(String refreshTokenStr) {
+    public AuthResponse refreshToken(String refreshTokenStr, String ipAddress, String userAgent) {
         RefreshToken refreshToken = refreshTokenRepository.findByToken(refreshTokenStr)
                 .orElseThrow(() -> new AuthException("Refresh token không hợp lệ"));
 
@@ -152,7 +158,7 @@ public class AuthService {
         // Token rotation — xóa token cũ
         refreshTokenRepository.delete(refreshToken);
 
-        return buildAuthResponse(user);
+        return buildAuthResponse(user, ipAddress, userAgent);
     }
 
     // ─── Logout ───────────────────────────────────────────────────────────────
@@ -268,7 +274,7 @@ public class AuthService {
             userRepository.save(user);
 
             auditLogService.log(user.getId(), user.getEmail(), "GOOGLE_LOGIN", ipAddress, userAgent, true, null);
-            return buildAuthResponse(user);
+            return buildAuthResponse(user, ipAddress, userAgent);
 
         } catch (AuthException e) {
             throw e;
@@ -311,29 +317,29 @@ public class AuthService {
     }
 
     private void handleFailedLogin(User user, String ipAddress, String userAgent) {
+        boolean enforceLock = settingService.getBoolean("lock_after_5_fails", true);
         int attempts = user.getFailedLoginAttempts() + 1;
         user.setFailedLoginAttempts(attempts);
 
-        if (attempts >= maxFailedAttempts) {
+        if (enforceLock && attempts >= maxFailedAttempts) {
             user.setAccountLocked(true);
             user.setLockExpiry(LocalDateTime.now().plusMinutes(lockDurationMinutes));
-            auditLogService.log(user.getId(), user.getEmail(), "ACCOUNT_LOCKED", ipAddress, userAgent, false,
-                    "Đăng nhập sai " + attempts + " lần");
-            log.warn("Tài khoản bị khóa: {} ({}  lần thất bại)", user.getEmail(), attempts);
-        } else {
-            auditLogService.log(user.getId(), user.getEmail(), "FAILED_LOGIN", ipAddress, userAgent, false,
-                    "Lần thất bại: " + attempts);
+            auditLogService.log(user.getId(), user.getEmail(), "ACCOUNT_LOCKED", ipAddress, userAgent, false, "Locked after " + attempts + " failed attempts");
         }
+        
         userRepository.save(user);
+        auditLogService.log(user.getId(), user.getEmail(), "FAILED_LOGIN", ipAddress, userAgent, false, "Invalid password");
     }
 
-    private AuthResponse buildAuthResponse(User user) {
+    private AuthResponse buildAuthResponse(User user, String ipAddress, String userAgent) {
         String accessToken = jwtTokenProvider.generateAccessToken(user);
         String refreshTokenStr = jwtTokenProvider.generateRefreshToken(user);
 
         RefreshToken refreshToken = new RefreshToken();
         refreshToken.setUserId(user.getId());
         refreshToken.setToken(refreshTokenStr);
+        refreshToken.setDeviceInfo(userAgent);
+        refreshToken.setIpAddress(ipAddress);
         refreshToken.setExpiresAt(LocalDateTime.now().plusSeconds(refreshTokenExpiry / 1000));
         refreshToken.setCreatedAt(LocalDateTime.now());
         refreshTokenRepository.save(refreshToken);
