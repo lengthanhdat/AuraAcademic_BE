@@ -1,54 +1,202 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" lang="vi">
 <head>
-    <meta charset="UTF-8"/>
+    <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <title>Xác thực tài khoản AuraAcademic</title>
+    <title>Xác thực tài khoản</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet"/>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: #0f0f1a; font-family: 'Segoe UI', Arial, sans-serif; }
-        .wrapper { max-width: 600px; margin: 40px auto; background: #1a1a2e; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 32px; text-align: center; }
-        .header h1 { color: #fff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
-        .header p { color: rgba(255,255,255,0.85); margin-top: 8px; font-size: 14px; }
-        .logo { width: 48px; height: 48px; background: rgba(255,255,255,0.2); border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 16px; font-size: 24px; }
-        .body { padding: 40px 32px; }
-        .greeting { color: #e2e8f0; font-size: 18px; font-weight: 600; margin-bottom: 16px; }
-        .text { color: #94a3b8; font-size: 15px; line-height: 1.7; margin-bottom: 24px; }
-        .btn { display: block; width: fit-content; margin: 0 auto 24px; background: linear-gradient(135deg, #667eea, #764ba2); color: #fff; text-decoration: none; padding: 14px 40px; border-radius: 10px; font-size: 16px; font-weight: 600; letter-spacing: 0.3px; }
-        .divider { border: none; border-top: 1px solid #2d2d4e; margin: 28px 0; }
-        .link-fallback { color: #64748b; font-size: 13px; word-break: break-all; }
-        .link-fallback a { color: #667eea; }
-        .expire { background: #16213e; border-left: 3px solid #667eea; padding: 12px 16px; border-radius: 0 8px 8px 0; color: #94a3b8; font-size: 13px; margin-bottom: 24px; }
-        .footer { background: #16213e; padding: 24px 32px; text-align: center; }
-        .footer p { color: #475569; font-size: 12px; line-height: 1.6; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f4f7f9;
+            margin: 0;
+            padding: 0;
+            -webkit-font-smoothing: antialiased;
+        }
+        .wrapper {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 32px;
+            overflow: hidden;
+            box-shadow: 0 20px 50px rgba(0,53,95,0.08);
+            border: 1px solid #f3f4f6;
+        }
+        .header {
+            background: linear-gradient(135deg, #00355f 0%, #0c406c 100%);
+            padding: 48px 32px;
+            text-align: center;
+        }
+        .logo-container {
+            width: 64px;
+            height: 64px;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 16px;
+            display: block;
+            margin: 0 auto 16px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            font-size: 32px;
+            line-height: 64px;
+            text-align: center;
+        }
+        .header h1 {
+            font-family: 'Outfit', sans-serif;
+            color: #ffffff;
+            font-size: 28px;
+            font-weight: 700;
+            margin: 0;
+            letter-spacing: -0.5px;
+        }
+        .body-content {
+            padding: 40px 48px;
+        }
+        .greeting {
+            font-family: 'Outfit', sans-serif;
+            color: #111827;
+            font-size: 24px;
+            font-weight: 700;
+            margin: 0 0 12px 0;
+        }
+        .greeting span {
+            color: #005bef;
+        }
+        .text {
+            color: #4b5563;
+            font-size: 15px;
+            line-height: 1.6;
+            margin: 0 0 32px 0;
+        }
+        .text strong {
+            color: #111827;
+            font-weight: 600;
+        }
+        .otp-container {
+            background: linear-gradient(180deg, #f0f6ff 0%, #ffffff 100%);
+            border: 1px solid #e0edff;
+            border-radius: 24px;
+            padding: 32px;
+            text-align: center;
+            margin-bottom: 32px;
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.02);
+        }
+        .otp-label {
+            display: block;
+            color: #003a9d;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            margin-bottom: 16px;
+        }
+        .otp-box {
+            display: inline-block;
+            background-color: #ffffff;
+            border-radius: 16px;
+            padding: 16px 32px;
+            border: 1px solid rgba(224, 237, 255, 0.6);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .otp-value {
+            font-family: 'Outfit', sans-serif;
+            color: #00355f;
+            font-size: 40px;
+            font-weight: 800;
+            letter-spacing: 0.5em;
+            margin-right: -0.5em;
+            line-height: 1;
+        }
+        .alert-box {
+            background-color: #eff6ff;
+            border: 1px solid #dbeafe;
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 32px;
+        }
+        .alert-text {
+            color: #1e3a8a;
+            font-size: 14px;
+            line-height: 1.6;
+            margin: 0;
+        }
+        .alert-text strong {
+            font-weight: 600;
+        }
+        .signature {
+            border-top: 1px solid #f3f4f6;
+            padding-top: 24px;
+            color: #6b7280;
+            font-size: 15px;
+        }
+        .signature strong {
+            color: #111827;
+            font-weight: 600;
+            display: block;
+            margin-top: 4px;
+        }
+        .footer {
+            background-color: #f9fafb;
+            padding: 32px;
+            text-align: center;
+            border-top: 1px solid #f3f4f6;
+        }
+        .footer p {
+            color: #9ca3af;
+            font-size: 12px;
+            line-height: 1.6;
+            margin: 0 0 16px 0;
+        }
+        .copyright {
+            color: #9ca3af;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin: 0;
+        }
+        @media only screen and (max-width: 600px) {
+            .wrapper { margin: 20px; border-radius: 24px; }
+            .body-content { padding: 32px 24px; }
+            .otp-value { font-size: 32px; }
+        }
     </style>
 </head>
 <body>
-<div class="wrapper">
-    <div class="header">
-        <div class="logo">🎓</div>
-        <h1 th:text="${appName}">AuraAcademic</h1>
-        <p>Nền tảng thi trực tuyến thông minh</p>
-    </div>
-    <div class="body">
-        <p class="greeting">Xin chào, <span th:text="${name}">Người dùng</span>!</p>
-        <p class="text">
-            Cảm ơn bạn đã đăng ký tài khoản tại <strong th:text="${appName}">AuraAcademic</strong>.
-            Để hoàn tất quá trình đăng ký và kích hoạt tài khoản, vui lòng nhấn vào nút bên dưới.
-        </p>
-        <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; padding: 16px; background: #2d2d4e; border-radius: 8px; text-align: center; margin-bottom: 24px; color: #fff;" th:text="${otp}">123456</div>
-        <div class="expire">
-            ⏰ Mã xác thực có hiệu lực trong <strong>24 giờ</strong> kể từ khi nhận được email này.
+    <div class="wrapper">
+        <div class="header">
+            <div class="logo-container">🎓</div>
+            <h1 th:text="${appName}">AuraAcademic</h1>
         </div>
-        <hr class="divider"/>
-        
+        <div class="body-content">
+            <h2 class="greeting">Xin chào, <span th:text="${name}">Người dùng</span>!</h2>
+            <p class="text">
+                Cảm ơn bạn đã lựa chọn <strong th:text="${appName}">AuraAcademic</strong>. 
+                Để bảo mật tài khoản và hoàn tất quá trình đăng ký, vui lòng sử dụng mã xác thực gồm 6 chữ số dưới đây.
+            </p>
+
+            <div class="otp-container">
+                <span class="otp-label">Mã xác thực của bạn</span>
+                <div class="otp-box">
+                    <span class="otp-value" th:text="${otp}">123456</span>
+                </div>
+            </div>
+
+            <div class="alert-box">
+                <p class="alert-text">
+                    ⏱️ Mã xác thực này có hiệu lực trong <strong>10 phút</strong>. Nếu bạn không yêu cầu mã này, vui lòng bỏ qua email để đảm bảo an toàn.
+                </p>
+            </div>
+
+            <div class="signature">
+                Trân trọng,<br/>
+                <strong th:text="'Đội ngũ ' + ${appName}">Đội ngũ AuraAcademic</strong>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>Email này được gửi tự động, vui lòng không trả lời trực tiếp.</p>
+            <p class="copyright">© 2026 <span th:text="${appName}">AuraAcademic</span>. All rights reserved.</p>
+        </div>
     </div>
-    <div class="footer">
-        <p>Email này được gửi tự động, vui lòng không trả lời.<br/>
-        Nếu bạn không đăng ký tài khoản, hãy bỏ qua email này.</p>
-        <p style="margin-top: 8px;">© 2026 AuraAcademic. All rights reserved.</p>
-    </div>
-</div>
 </body>
 </html>

@@ -38,6 +38,7 @@ target/
 .idea/
 *.iml
 *.log
+application-secrets.properties
 
 # Python (AI Service)
 venv/

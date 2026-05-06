@@ -62,10 +62,10 @@ public class EmailService {
         }
     }
 
-    private void sendHtml(String to, String subject, String htmlContent) throws MessagingException {
+    private void sendHtml(String to, String subject, String htmlContent) throws MessagingException, java.io.UnsupportedEncodingException {
         MimeMessage message = mailSender.createMimeMessage();
         MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
-        helper.setFrom(fromEmail);
+        helper.setFrom(fromEmail, "AuraAcademic");
         helper.setTo(to);
         helper.setSubject(subject);
         helper.setText(htmlContent, true);
