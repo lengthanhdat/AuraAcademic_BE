@@ -21,7 +21,6 @@ public class AuthController {
         this.authService = authService;
     }
 
-
     // ─── Register ─────────────────────────────────────────────────────────────
 
     /** POST /api/auth/register */
@@ -41,7 +40,8 @@ public class AuthController {
     public ResponseEntity<AuthResponse> login(
             @Valid @RequestBody LoginRequest request,
             HttpServletRequest httpRequest) {
-        AuthResponse response = authService.login(request, getClientIp(httpRequest), httpRequest.getHeader("User-Agent"));
+        AuthResponse response = authService.login(request, getClientIp(httpRequest),
+                httpRequest.getHeader("User-Agent"));
         return ResponseEntity.ok(response);
     }
 
@@ -53,10 +53,9 @@ public class AuthController {
             @Valid @RequestBody RefreshTokenRequest request,
             HttpServletRequest httpRequest) {
         return ResponseEntity.ok(authService.refreshToken(
-                request.getRefreshToken(), 
-                getClientIp(httpRequest), 
-                httpRequest.getHeader("User-Agent")
-        ));
+                request.getRefreshToken(),
+                getClientIp(httpRequest),
+                httpRequest.getHeader("User-Agent")));
     }
 
     // ─── Logout ───────────────────────────────────────────────────────────────
@@ -96,7 +95,7 @@ public class AuthController {
             HttpServletRequest httpRequest) {
         authService.forgotPassword(request.getEmail(), getClientIp(httpRequest));
         // Luôn trả OK để tránh user enumeration
-        return ResponseEntity.ok(Map.of("message", "Nếu email tồn tại, link đặt lại mật khẩu đã được gửi."));
+        return ResponseEntity.ok(Map.of("message", "Link đặt lại mật khẩu đã được gửi."));
     }
 
     /** POST /api/auth/reset-password */

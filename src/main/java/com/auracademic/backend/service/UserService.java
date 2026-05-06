@@ -51,7 +51,19 @@ public class UserService {
         if (request.getWorkplace() != null) user.setWorkplace(request.getWorkplace());
         if (request.getSchedule() != null) user.setSchedule(request.getSchedule());
         if (request.getBio() != null) user.setBio(request.getBio());
+        if (request.getCertificates() != null) user.setCertificates(request.getCertificates());
+        if (request.getExperience() != null) user.setExperience(request.getExperience());
 
+        user.setUpdatedAt(LocalDateTime.now());
+        userRepository.save(user);
+        return userMapper.toProfile(user);
+    }
+
+    public UserProfileResponse updateAvatar(String userId, String base64Avatar) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new AuthException("Không tìm thấy người dùng"));
+        
+        user.setAvatarUrl(base64Avatar);
         user.setUpdatedAt(LocalDateTime.now());
         userRepository.save(user);
         return userMapper.toProfile(user);

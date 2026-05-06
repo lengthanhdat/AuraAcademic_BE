@@ -18,6 +18,8 @@ public class UserProfileResponse {
     private String schedule;
     private String avatarUrl;
     private String bio;
+    private String certificates;
+    private String experience;
     private String provider;
     private boolean emailVerified;
     private boolean twoFactorEnabled;
@@ -166,6 +168,22 @@ public class UserProfileResponse {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public String getCertificates() {
+        return certificates;
+    }
+
+    public void setCertificates(String certificates) {
+        this.certificates = certificates;
+    }
+
+    public String getExperience() {
+        return experience;
+    }
+
+    public void setExperience(String experience) {
+        this.experience = experience;
     }
 
     public LocalDateTime getLastLoginAt() {

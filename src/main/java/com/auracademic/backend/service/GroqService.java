@@ -32,7 +32,7 @@ public class GroqService {
 
     private static final Logger log = LoggerFactory.getLogger(GroqService.class);
 
-    @Value("${groq.api.key}")
+    @Value("${groq.api.key:}")
     private String apiKey;
 
     @Value("${groq.url}")

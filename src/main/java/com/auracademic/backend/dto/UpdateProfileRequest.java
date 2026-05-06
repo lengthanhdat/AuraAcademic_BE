@@ -15,6 +15,8 @@ public class UpdateProfileRequest {
     private String workplace;
     private String schedule;
     private String bio;
+    private String certificates;
+    private String experience;
 
     public String getFullName() { return fullName; }
     public void setFullName(String fullName) { this.fullName = fullName; }
@@ -36,4 +38,8 @@ public class UpdateProfileRequest {
     public void setSchedule(String schedule) { this.schedule = schedule; }
     public String getBio() { return bio; }
     public void setBio(String bio) { this.bio = bio; }
+    public String getCertificates() { return certificates; }
+    public void setCertificates(String certificates) { this.certificates = certificates; }
+    public String getExperience() { return experience; }
+    public void setExperience(String experience) { this.experience = experience; }
 }

@@ -41,6 +41,8 @@ public class User {
     private LocalDateTime lastLoginAt;
 
     private String bio;
+    private String certificates;
+    private String experience;
     private LocalDateTime updatedAt;
 
 public String getId() {
@@ -273,6 +275,22 @@ public String getId() {
 
     public void setBio(String bio) {
         this.bio = bio;
+    }
+
+    public String getCertificates() {
+        return certificates;
+    }
+
+    public void setCertificates(String certificates) {
+        this.certificates = certificates;
+    }
+
+    public String getExperience() {
+        return experience;
+    }
+
+    public void setExperience(String experience) {
+        this.experience = experience;
     }
 
     public LocalDateTime getUpdatedAt() {

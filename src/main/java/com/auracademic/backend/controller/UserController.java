@@ -49,6 +49,21 @@ public class UserController {
         return ResponseEntity.ok(userService.updateProfile(principal.getId(), request));
     }
 
+    /** PUT /api/users/me/avatar */
+    @PutMapping("/me/avatar")
+    public ResponseEntity<UserProfileResponse> updateAvatar(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestBody Map<String, String> request) {
+        String base64Avatar = request.get("avatarUrl");
+        if (base64Avatar == null || base64Avatar.isBlank()) {
+            throw new IllegalArgumentException("Ảnh đại diện không được trống");
+        }
+        if (!base64Avatar.startsWith("data:image/")) {
+            throw new IllegalArgumentException("Định dạng ảnh không hợp lệ (chỉ nhận JPG, PNG, WEBP)");
+        }
+        return ResponseEntity.ok(userService.updateAvatar(principal.getId(), base64Avatar));
+    }
+
     /** PUT /api/users/me/password */
     @PutMapping("/me/password")
     public ResponseEntity<Map<String, String>> changePassword(
