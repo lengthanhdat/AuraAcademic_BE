@@ -15,6 +15,7 @@ public class Exam {
     private boolean shuffle;
     private boolean aiProctoring;
     private String teacherId;
+    private String teacherName;
     private String status; // "DRAFT", "PUBLISHED", "FINISHED"
     private String accessCode; // Mã phòng thi (vd: A1B2C3)
     private Long startTime; // Thời điểm bắt đầu (timestamp)
@@ -70,6 +71,14 @@ public class Exam {
 
     public void setTeacherId(String teacherId) {
         this.teacherId = teacherId;
+    }
+
+    public String getTeacherName() {
+        return teacherName;
+    }
+
+    public void setTeacherName(String teacherName) {
+        this.teacherName = teacherName;
     }
 
     public String getStatus() {

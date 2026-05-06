@@ -49,7 +49,8 @@ public class SecurityConfig {
                         .requestMatchers(
                                 "/api/auth/**",
                                 "/actuator/health",
-                                "/api/health"
+                                "/api/health",
+                                "/api/exams/*/violation"  // AI Service gửi vi phạm, không có JWT
                         ).permitAll()
                         // Admin only
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")

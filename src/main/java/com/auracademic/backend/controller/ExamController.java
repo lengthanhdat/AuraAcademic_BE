@@ -62,19 +62,30 @@ public class ExamController {
     @PostMapping("/{code}/heartbeat")
     public ResponseEntity<?> heartbeat(@PathVariable String code, @RequestBody Map<String, String> body) {
         String studentId = body.get("studentId");
+        String status = body.getOrDefault("status", "LOBBY"); // "LOBBY" hoặc "EXAM"
         if (studentId != null && !studentId.isBlank()) {
-            activeParticipantService.heartbeat(code, studentId);
-            // Broadcast cập nhật số người chờ
-            long count = activeParticipantService.getActiveCount(code);
-            examEventService.broadcast(code, "count", Map.of("activeCount", count));
+            activeParticipantService.heartbeat(code, studentId, status);
+            // Broadcast cập nhật số người cho giáo viên
+            long lobbyCount = activeParticipantService.getLobbyCount(code);
+            long examCount  = activeParticipantService.getExamCount(code);
+            examEventService.broadcast(code, "count", Map.of(
+                "activeCount", lobbyCount + examCount,
+                "lobbyCount", lobbyCount,
+                "examCount",  examCount
+            ));
         }
         return ResponseEntity.ok().build();
     }
 
     @GetMapping("/{code}/active-count")
     public ResponseEntity<?> getActiveCount(@PathVariable String code) {
-        long count = activeParticipantService.getActiveCount(code);
-        return ResponseEntity.ok(Map.of("activeCount", count));
+        long lobby = activeParticipantService.getLobbyCount(code);
+        long exam  = activeParticipantService.getExamCount(code);
+        return ResponseEntity.ok(Map.of(
+            "activeCount", lobby + exam,
+            "lobbyCount",  lobby,
+            "examCount",   exam
+        ));
     }
 
     @PostMapping("/{code}/leave")
@@ -82,9 +93,13 @@ public class ExamController {
         String studentId = body.get("studentId");
         if (studentId != null && !studentId.isBlank()) {
             activeParticipantService.removeParticipant(code, studentId);
-            // Broadcast cập nhật số người chờ
-            long count = activeParticipantService.getActiveCount(code);
-            examEventService.broadcast(code, "count", Map.of("activeCount", count));
+            long lobbyCount = activeParticipantService.getLobbyCount(code);
+            long examCount  = activeParticipantService.getExamCount(code);
+            examEventService.broadcast(code, "count", Map.of(
+                "activeCount", lobbyCount + examCount,
+                "lobbyCount", lobbyCount,
+                "examCount",  examCount
+            ));
         }
         return ResponseEntity.ok().build();
     }
@@ -136,7 +151,7 @@ public class ExamController {
                     if ("DRAFT".equals(exam.getStatus())) {
                         return ResponseEntity.badRequest().body("Phòng thi này chưa được mở.");
                     }
-                    if ("FINISHED".equals(exam.getStatus())) {
+                    if ("FINISHED".equals(exam.getStatus()) || "COMPLETED".equals(exam.getStatus())) {
                         return ResponseEntity.badRequest().body("Phòng thi này đã kết thúc.");
                     }
                     Map<String, Object> info = new HashMap<>();
@@ -147,7 +162,7 @@ public class ExamController {
                     info.put("startTime", exam.getStartTime());
                     return ResponseEntity.ok(info);
                 })
-                .orElse(ResponseEntity.notFound().build());
+                .orElse(ResponseEntity.status(404).body("Mã phòng thi không tồn tại."));
     }
 
     @GetMapping("/join/{code}")
@@ -274,6 +289,25 @@ public class ExamController {
             }).orElse(ResponseEntity.notFound().build());
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error closing exam: " + e.getMessage());
+        }
+    }
+
+    /**
+     * He thong tu dong ket thuc khi het gio
+     */
+    @PostMapping("/{id}/finish")
+    public ResponseEntity<?> finishExam(@PathVariable String id) {
+        try {
+            return examRepository.findById(id).map(exam -> {
+                exam.setStatus("COMPLETED");
+                examRepository.save(exam);
+                // Broadcast cho tất cả biết bài thi đã kết thúc
+                examEventService.broadcast(exam.getAccessCode(), "status",
+                    Map.of("status", "COMPLETED"));
+                return ResponseEntity.ok(Map.of("message", "Bai thi da ket thuc tu dong."));
+            }).orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error finishing exam: " + e.getMessage());
         }
     }
 

@@ -40,6 +40,9 @@ public class AiProcessingService {
     @Autowired
     private GeminiService geminiService;
 
+    @Autowired
+    private GroqService groqService;
+
     /**
      * Xử lý toàn bộ pipeline AI trong một thread riêng biệt.
      *
@@ -54,7 +57,7 @@ public class AiProcessingService {
             jobId, filename, count);
 
         try {
-            // ── Bước 1: Trích xuất văn bản từ tài liệu ──────────────
+            // ── Bước 1: Trích xuất văn bản từ tài liệu ────────────────
             log.info("[AiJob:{}] Đang trích xuất văn bản...", jobId);
             Map<String, Object> content = documentExtractorService.extractContent(fileBytes, filename);
             String extractedText = (String) content.get("text");
@@ -68,16 +71,33 @@ public class AiProcessingService {
 
             log.info("[AiJob:{}] Trích xuất xong — {} ký tự văn bản, {} hình ảnh", jobId, extractedText.length(), extractedImages.size());
 
-            // ── Bước 2: Gọi Gemini AI (có @Retryable tự động) ───────
-            log.info("[AiJob:{}] Đang gọi Gemini AI...", jobId);
-            List<Question> questions;
-            if (!extractedImages.isEmpty()) {
-                questions = geminiService.generateQuestionsWithImages(extractedText, extractedImages, count);
-            } else {
-                questions = geminiService.generateQuestions(extractedText, count);
+            // ── Bước 2: Thử goi Gemini AI (Primary) ──────────────────
+            List<Question> questions = null;
+            String usedProvider = "Gemini";
+            try {
+                log.info("[AiJob:{}] Đang gọi Gemini AI...", jobId);
+                if (!extractedImages.isEmpty()) {
+                    questions = geminiService.generateQuestionsWithImages(extractedText, extractedImages, count);
+                } else {
+                    questions = geminiService.generateQuestions(extractedText, count);
+                }
+            } catch (Exception geminiEx) {
+                log.warn("[AiJob:{}] Gemini thất bại: {}", jobId, geminiEx.getMessage());
+
+                // Nếu lỗi do hết quota (429 / RESOURCE_EXHAUSTED / API key bị khóa 403)
+                // → Tự động chuyển sang Groq
+                if (isQuotaError(geminiEx)) {
+                    log.warn("[AiJob:{}] Gemini hết quota — Đang chuyển sang Groq dự phòng...", jobId);
+                    usedProvider = "Groq";
+                    questions = groqService.generateQuestions(extractedText, count);
+                    log.info("[AiJob:{}] Groq sinh thành công {} câu hỏi", jobId, questions.size());
+                } else {
+                    // Lỗi khác (network, format...) → ném lại để xử lý bình thường
+                    throw geminiEx;
+                }
             }
 
-            // ── Bước 3: Lưu kết quả → DONE ──────────────────────────
+            // ── Bước 3: Lưu kết quả → DONE ──────────────────────
             AiJob job = aiJobRepository.findById(jobId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy job: " + jobId));
 
@@ -87,7 +107,7 @@ public class AiProcessingService {
             job.setExtractedImages(extractedImages);
             aiJobRepository.save(job);
 
-            log.info("[AiJob:{}] Hoàn thành — {} câu hỏi đã được tạo", jobId, questions.size());
+            log.info("[AiJob:{}] Hoàn thành (provider: {}) — {} câu hỏi đã được tạo", jobId, usedProvider, questions.size());
 
         } catch (Exception e) {
             log.error("[AiJob:{}] Thất bại — {}", jobId, e.getMessage(), e);
@@ -112,6 +132,20 @@ public class AiProcessingService {
         } catch (Exception saveEx) {
             log.error("[AiJob:{}] Không thể lưu trạng thái FAILED: {}", jobId, saveEx.getMessage());
         }
+    }
+
+    /**
+     * Kiểm tra xem exception có phải do hết quota / API key bị khóa không.
+     * Bao gồm: 429 Rate Limit, RESOURCE_EXHAUSTED, và 403 với thông báo lộ key của Google.
+     */
+    private boolean isQuotaError(Exception e) {
+        String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+        return msg.contains("429")
+            || msg.contains("resource_exhausted")
+            || msg.contains("ratequota")
+            || msg.contains("quota")
+            || (msg.contains("403") && msg.contains("permission_denied"))
+            || msg.contains("reported as leaked");
     }
 
     /** Chuyển exception thành thông báo lỗi thân thiện với người dùng */
