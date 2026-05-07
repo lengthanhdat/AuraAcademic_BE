@@ -141,8 +141,138 @@ public class GeminiService {
     }
 
     // ─────────────────────────────────────────────────────────────────
+    // PUBLIC API — Tự động kiểm duyệt tài liệu giảng dạy
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Gọi Gemini AI để kiểm duyệt tài liệu — đa ngôn ngữ, nhận diện mọi từ cấm/tục tĩu.
+     * Trả về Map:
+     *   - "approved"        (Boolean)      : true = duyệt, false = từ chối
+     *   - "reason"          (String)       : lý do cụ thể bằng tiếng Việt
+     *   - "violationType"   (String)       : PROFANITY | SEXUAL_CONTENT | VIOLENCE |
+     *                                        HATE_SPEECH | POLITICAL | COPYRIGHT | NONE
+     *   - "suggestedTags"   (List<String>) : gợi ý thẻ tag học thuật
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> reviewMaterial(String title, String description,
+                                               String subject, String fileType,
+                                               String category, String fileName,
+                                               String extractedContent) {
+        // Chuẩn bị phần nội dung file để đưa vào prompt
+        String contentSection = (extractedContent != null && !extractedContent.isBlank())
+            ? "\n\n# NỘI DUNG BÊN TRONG FILE (trích xuất tự động — đây là phần QUAN TRỌNG NHẤT):\n```\n" + extractedContent + "\n```"
+            : "\n\n# NỘI DUNG FILE: Không thể trích xuất (file nhị phân/video) — chỉ kiểm tra metadata.";
+
+        String prompt = """
+            # VAI TRÒ
+            Bạn là hệ thống kiểm duyệt nội dung tự động (Content Moderation AI) của nền tảng giáo dục Aura Academic.
+            Nhiệm vụ: BẢO VỆ môi trường học thuật bằng cách phát hiện và chặn mọi nội dung không phù hợp
+            TRƯỚC KHI tài liệu được công khai đến học sinh.
+
+            # THÔNG TIN TÀI LIỆU
+            - Tên file gốc : %s
+            - Tiêu đề     : %s
+            - Mô tả       : %s
+            - Môn học     : %s
+            - Định dạng   : %s
+            - Phân loại   : %s
+            %s
+
+            # TIÊU CHÍ KIỂM DUYỆT (phân tích TẤT CẢ ngôn ngữ — bao gồm cả nội dung file bên trên)
+
+            ## 🔴 MỨC 1 — TỰ ĐỘNG TỪ CHỐI NGAY
+
+            ### 1. NGÔN TỤC & TỪ CẤM (PROFANITY) — nhận diện ĐA NGÔN NGỮ:
+            **Tiếng Việt:** đụ, lồn, cặc, địt, đéo, đm, đmm, vcl, vkl, clm, dcm, địt con mẹ, đụ má
+            Teen code / biến thể: đ**, c*c, l*n, đ.ụ, d.ụ, loz, cak, buoi, buồi
+            Leet speak: d_u, c4c, l0n, du ma, du me, du ba, d1t, c4c
+            Tiếng lóng: vãi, vl, đù má, tổ cha, đĩ, điếm, cave
+
+            **Tiếng Anh:** fuck, shit, bitch, cunt, cock, dick, pussy, ass, asshole, motherfucker, whore, slut
+            Leet: f*ck, sh!t, b!tch, @ss, f**k, fck, btch, cnt
+
+            **Tiếng Trung/Nhật/Hàn:** 操你妈, 草泥马, 滚蛋, 傻逼, ちくしょう, くそ, 씨발, 개새끼, 존나
+
+            **Tiếng Pháp/TBN:** merde, putain, salope, coño, puta, joder, hijo de puta
+
+            **Ký tự thay thế:** *, @, !, 0, 3, 4, $ thay chữ → VẪN VI PHẠM nếu đọc ra được từ tục.
+
+            ### 2. NỘI DUNG TÌNH DỤC (SEXUAL_CONTENT): Mô tả hành vi tình dục, khiêu dâm, NSFW
+            ### 3. BẠO LỰC & KỲ THỊ (VIOLENCE / HATE_SPEECH): Kêu gọi bạo lực, phân biệt chủng tộc
+            ### 4. CHÍNH TRỊ NHẠY CẢM (POLITICAL): Tuyên truyền, chống nhà nước
+            ### 5. VI PHẠM BẢN QUYỀN (COPYRIGHT): Sao chép tài liệu thương mại rõ ràng
+
+            ## 🟢 NGOẠI LỆ — KHÔNG TỪ CHỐI:
+            - Từ y khoa (dương vật, âm đạo, sinh sản) trong văn cảnh học thuật → CHẤP NHẬN
+            - Phân tích văn học nhạy cảm với mô tả học thuật → CHẤP NHẬN
+            - Thông tin sơ sài không rõ ràng → ưu tiên DUYỆT
+
+            ## 🟡 MỨC 2 — TÍNH HỌC THUẬT:
+            - Nội dung phải liên quan đến giáo dục, học tập, môn học khai báo
+            - Tiêu đề và mô tả phải rõ ràng, chuyên nghiệp
+
+            # FORMAT TRẢ VỀ (DUY NHẤT JSON, KHÔNG GIẢI THÍCH THÊM):
+            {"approved":true,"reason":"Lý do tiếng Việt","violationType":"NONE","suggestedTags":["tag1","tag2"]}
+
+            violationType chỉ nhận: PROFANITY, SEXUAL_CONTENT, VIOLENCE, HATE_SPEECH, POLITICAL, COPYRIGHT, NONE
+            """.formatted(
+                fileName        != null ? fileName        : "",
+                title           != null ? title           : "",
+                description     != null ? description     : "",
+                subject         != null ? subject         : "",
+                fileType        != null ? fileType        : "",
+                category        != null ? category        : "",
+                contentSection
+        );
+
+        try {
+            String raw = callGeminiText(prompt);
+            String sanitized = raw.trim();
+            if (sanitized.contains("```")) {
+                int s = sanitized.indexOf("```"), e = sanitized.lastIndexOf("```");
+                if (s != e) { sanitized = sanitized.substring(s + 3, e); }
+                if (sanitized.toLowerCase().startsWith("json")) sanitized = sanitized.substring(4).trim();
+            }
+            Map<String, Object> result = mapper.readValue(sanitized, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            log.info("[Gemini-Review] approved={}, violationType={}, reason={}",
+                    result.get("approved"), result.get("violationType"), result.get("reason"));
+            return result;
+        } catch (Exception ex) {
+            log.error("[Gemini-Review] Kiểm duyệt thất bại: {}", ex.getMessage());
+            return Map.of(
+                "approved", true,
+                "reason", "AI kiểm duyệt tạm thời không khả dụng. Tài liệu được chuyển chờ Admin duyệt thủ công.",
+                "violationType", "NONE",
+                "suggestedTags", List.of()
+            );
+        }
+    }
+
+    /** Gọi Gemini API và trả về raw text (không parse Question) */
+    private String callGeminiText(String prompt) throws Exception {
+        String url = buildUrl(PRIMARY_MODEL);
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))));
+        requestBody.put("generationConfig", Map.of(
+            "temperature", 0.1,
+            "response_mime_type", "application/json"
+        ));
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        String responseStr = restTemplate.postForObject(url, new HttpEntity<>(requestBody, headers), String.class);
+
+        Map<String, Object> responseMap = mapper.readValue(responseStr, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+        List<Map<String, Object>> candidates = (List<Map<String, Object>>) responseMap.get("candidates");
+        if (candidates == null || candidates.isEmpty()) throw new RuntimeException("Gemini candidates rỗng");
+        Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
+        List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
+        return (String) parts.get(0).get("text");
+    }
+
+    // ─────────────────────────────────────────────────────────────────
     // PROMPT BUILDERS
     // ─────────────────────────────────────────────────────────────────
+
 
     private String buildGeneratePrompt(String text, int count) {
         return """

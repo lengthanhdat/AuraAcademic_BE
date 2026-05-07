@@ -26,6 +26,8 @@ public class UserMapper {
         res.setSchedule(user.getSchedule());
         res.setAvatarUrl(user.getAvatarUrl());
         res.setBio(user.getBio());
+        res.setCertificates(user.getCertificates());
+        res.setExperience(user.getExperience());
         res.setTwoFactorEnabled(user.isTwoFactorEnabled());
         res.setCreatedAt(user.getCreatedAt());
         res.setLastLoginAt(user.getLastLoginAt());
