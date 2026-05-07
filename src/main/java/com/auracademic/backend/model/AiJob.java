@@ -20,6 +20,8 @@ public class AiJob {
     private String extractedText;
     private List<String> extractedImages;
     private String errorMessage;
+    private String provider;
+    private long processingTimeMs;
 
     @Indexed
     private long createdAt;
@@ -38,6 +40,10 @@ public class AiJob {
     public void setExtractedImages(List<String> extractedImages) { this.extractedImages = extractedImages; }
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+    public String getProvider() { return provider; }
+    public void setProvider(String provider) { this.provider = provider; }
+    public long getProcessingTimeMs() { return processingTimeMs; }
+    public void setProcessingTimeMs(long processingTimeMs) { this.processingTimeMs = processingTimeMs; }
     public long getCreatedAt() { return createdAt; }
     public void setCreatedAt(long createdAt) { this.createdAt = createdAt; }
 }

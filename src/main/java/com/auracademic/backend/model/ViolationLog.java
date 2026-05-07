@@ -12,16 +12,18 @@ public class ViolationLog {
     private String studentName;
     private String type;
     private long timestamp;
-    private String videoUrl;
+    private String videoUrl;    // Legacy: URL file video
+    private String videoBase64; // Mới: video mã hóa Base64 để hiển thị trực tiếp
 
     public ViolationLog() {}
 
-    public ViolationLog(String examCode, String studentId, String studentName, String type, String videoUrl, long timestamp) {
+    public ViolationLog(String examCode, String studentId, String studentName, String type, String videoUrl, String videoBase64, long timestamp) {
         this.examCode = examCode;
         this.studentId = studentId;
         this.studentName = studentName;
         this.type = type;
         this.videoUrl = videoUrl;
+        this.videoBase64 = videoBase64;
         this.timestamp = timestamp;
     }
 
@@ -42,7 +44,10 @@ public class ViolationLog {
     
     public String getVideoUrl() { return videoUrl; }
     public void setVideoUrl(String videoUrl) { this.videoUrl = videoUrl; }
-    
+
+    public String getVideoBase64() { return videoBase64; }
+    public void setVideoBase64(String videoBase64) { this.videoBase64 = videoBase64; }
+
     public long getTimestamp() { return timestamp; }
     public void setTimestamp(long timestamp) { this.timestamp = timestamp; }
 }

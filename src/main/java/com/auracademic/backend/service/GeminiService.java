@@ -39,9 +39,9 @@ public class GeminiService {
     @Value("${gemini.api.key}")
     private String apiKey;
 
-    // Dùng gemini-1.5-flash làm primary: nhanh hơn, ổn định hơn 2.5-flash ở free tier
+    // gemini-2.5-flash: model chính. parseResponse() đã xử lý đúng thinking parts.
+    // Khi hết quota hoặc lỗi → AiProcessingService sẽ fallback sang Groq tự động.
     private static final String PRIMARY_MODEL   = "gemini-2.5-flash";
-    private static final String FALLBACK_MODEL  = "gemini-2.5-flash";
     private static final String GEMINI_HOST     = "https://generativelanguage.googleapis.com/";
 
     // Không giới hạn văn bản theo yêu cầu của user
@@ -250,19 +250,37 @@ public class GeminiService {
      */
     @SuppressWarnings("unchecked")
     private List<Question> parseResponse(String rawResponse) throws Exception {
-        // Lấy text từ Gemini response structure
         Map<String, Object> responseMap = mapper.readValue(rawResponse, new TypeReference<>() {});
         List<Map<String, Object>> candidates = (List<Map<String, Object>>) responseMap.get("candidates");
 
         if (candidates == null || candidates.isEmpty()) {
-            throw new RuntimeException("Gemini không trả về câu trả lời (candidates rỗng).");
+            // Kiểm tra promptFeedback để cung cấp thông báo lỗi rõ hơn
+            Object feedback = responseMap.get("promptFeedback");
+            log.error("[Gemini] candidates rỗng. promptFeedback: {}", feedback);
+            throw new RuntimeException("Gemini không trả về câu trả lời (candidates rỗng). PromptFeedback: " + feedback);
         }
 
         Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
+        if (content == null) {
+            Object finishReason = candidates.get(0).get("finishReason");
+            throw new RuntimeException("Gemini trả về content null. finishReason: " + finishReason);
+        }
         List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
-        String rawText = (String) parts.get(0).get("text");
 
-        // Làm sạch nếu vẫn còn markdown fence
+        // Tìm part chứa text output thực sự (bỏ qua các 'thought' parts của thinking model)
+        // Thinking model (gemini-2.5-*) có thể có: [{"thought": true, "text": "..."}, {"text": "JSON"}]
+        String rawText = null;
+        for (Map<String, Object> part : parts) {
+            Boolean isThought = (Boolean) part.get("thought");
+            if (Boolean.TRUE.equals(isThought)) continue; // Bỏ qua thought part
+            rawText = (String) part.get("text");
+            if (rawText != null && !rawText.isBlank()) break;
+        }
+        if (rawText == null || rawText.isBlank()) {
+            throw new RuntimeException("Gemini không trả về text output (tất cả parts đều là thought hoặc rỗng).");
+        }
+
+        // Làm sạch markdown fence nếu có
         String sanitized = rawText.trim();
         if (sanitized.contains("```")) {
             int first = sanitized.indexOf("```");
@@ -273,9 +291,18 @@ public class GeminiService {
                 sanitized = inner.trim();
             }
         }
-        log.info("[Gemini] JSON từ AI: {}", sanitized);
 
-        // Thử sửa lỗi JSON nếu bị cắt ngang (do giới hạn max_output_tokens)
+        // Trích xuất JSON array (bỏ qua text thừa trước/sau)
+        int arrayStart = sanitized.indexOf('[');
+        int arrayEnd   = sanitized.lastIndexOf(']');
+        if (arrayStart != -1 && arrayEnd != -1 && arrayEnd > arrayStart) {
+            sanitized = sanitized.substring(arrayStart, arrayEnd + 1);
+        }
+
+        log.info("[Gemini] JSON từ AI (500 ký tự đầu): {}",
+            sanitized.length() > 500 ? sanitized.substring(0, 500) + "..." : sanitized);
+
+        // Thử sửa lỗi JSON nếu bị cắt ngang
         String repairedJson = repairTruncatedJson(sanitized);
 
         // Parse JSON array thành List<Question>
@@ -284,7 +311,7 @@ public class GeminiService {
             rawList = mapper.readValue(repairedJson, new TypeReference<>() {});
         } catch (Exception e) {
             log.error("[Gemini] Lỗi parse JSON sau khi repair. Nội dung: {}", repairedJson);
-            throw new RuntimeException("AI trả về định dạng không hợp lệ. Vui lòng thử lại.");
+            throw new RuntimeException("Gemini trả về định dạng không hợp lệ: " + e.getMessage());
         }
 
         List<Question> questions = new ArrayList<>();

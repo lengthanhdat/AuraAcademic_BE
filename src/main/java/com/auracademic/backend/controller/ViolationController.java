@@ -12,7 +12,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/exams")
-@CrossOrigin(origins = "http://localhost:3000") // Trùng khớp với ExamController
+
 public class ViolationController {
 
     @Autowired
@@ -23,16 +23,17 @@ public class ViolationController {
 
     @PostMapping("/{code}/violation")
     public ResponseEntity<?> reportViolation(@PathVariable String code, @RequestBody Map<String, String> body) {
-        String studentId = body.get("studentId");
+        String studentId   = body.get("studentId");
         String studentName = body.get("studentName");
-        String type = body.get("type");
-        String videoUrl = body.get("videoUrl");
-        
+        String type        = body.get("type");
+        String videoUrl    = body.get("videoUrl");    // Legacy support
+        String videoBase64 = body.get("videoBase64"); // Mới: video Base64
+
         if (studentId == null || studentId.isBlank() || type == null || type.isBlank()) {
             return ResponseEntity.badRequest().body("Thiếu dữ liệu vi phạm (studentId, type)");
         }
 
-        ViolationLog log = new ViolationLog(code.toUpperCase(), studentId, studentName, type, videoUrl, System.currentTimeMillis());
+        ViolationLog log = new ViolationLog(code.toUpperCase(), studentId, studentName, type, videoUrl, videoBase64, System.currentTimeMillis());
         ViolationLog savedLog = violationRepository.save(log);
 
         // Phát tín hiệu Realtime cho Giáo viên

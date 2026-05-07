@@ -19,7 +19,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/exams")
-@CrossOrigin(origins = "http://localhost:3000") // TODO: use configured CORS instead of hardcoding for production
+
 public class ExamController {
 
     @Autowired
@@ -169,7 +169,12 @@ public class ExamController {
     public ResponseEntity<?> joinExam(@PathVariable String code) {
         return examRepository.findByAccessCode(code.toUpperCase())
                 .map(exam -> {
-                    if (!"STARTED".equals(exam.getStatus()) && !"PUBLISHED".equals(exam.getStatus())) {
+                    // Chỉ cho phép vào thi khi GV đã nhấn "Bắt đầu thi" (STARTED)
+                    if (!"STARTED".equals(exam.getStatus())) {
+                        if ("PUBLISHED".equals(exam.getStatus())) {
+                            return ResponseEntity.badRequest().body(
+                                "Giáo viên chưa bắt đầu buổi thi. Vui lòng chờ trong phòng chờ.");
+                        }
                         return ResponseEntity.badRequest().body("Kỳ thi này chưa bắt đầu hoặc đã kết thúc.");
                     }
                     if (exam.getStartTime() != null) {
@@ -182,14 +187,13 @@ public class ExamController {
                     int versionIdx = (int) (Math.random() * exam.getVersions().size());
                     ExamVersion selectedVersion = exam.getVersions().get(versionIdx);
                     
-                    // Trả về object chứa cả thông tin chung của kỳ thi
                     Map<String, Object> response = new HashMap<>();
                     response.put("title", exam.getTitle());
                     response.put("duration", exam.getDuration());
-                    response.put("startTime", exam.getStartTime()); // Gửi mốc bắt đầu của cả phòng
+                    response.put("startTime", exam.getStartTime());
                     response.put("versionCode", selectedVersion.getVersionCode());
                     response.put("questions", selectedVersion.getQuestions());
-                    response.put("extractedImages", exam.getExtractedImages());
+                    response.put("extractedImages", exam.getExtractedImages()); // Cần thiết để hiển thị ảnh trong câu hỏi
                     
                     return ResponseEntity.ok(response);
                 })
@@ -207,11 +211,35 @@ public class ExamController {
     public ResponseEntity<?> updateExam(@PathVariable String id, @RequestBody Exam exam) {
         try {
             exam.setId(id);
+            // Bảo toàn accessCode từ document cũ nếu payload không gửi lên
+            if (exam.getAccessCode() == null || exam.getAccessCode().isEmpty()) {
+                examRepository.findById(id).ifPresent(existing -> {
+                    if (existing.getAccessCode() != null && !existing.getAccessCode().isEmpty()) {
+                        exam.setAccessCode(existing.getAccessCode());
+                    } else {
+                        // Tạo mới nếu cả hai đều null
+                        exam.setAccessCode(java.util.UUID.randomUUID().toString().substring(0, 6).toUpperCase());
+                    }
+                });
+            }
             Exam updatedExam = examRepository.save(exam);
             return ResponseEntity.ok(updatedExam);
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error updating exam: " + e.getMessage());
         }
+    }
+
+    /**
+     * Tạo/làm mới mã phòng thi cho các đề chưa có mã
+     */
+    @PostMapping("/{id}/generate-code")
+    public ResponseEntity<?> generateAccessCode(@PathVariable String id) {
+        return examRepository.findById(id).map(exam -> {
+            String newCode = java.util.UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+            exam.setAccessCode(newCode);
+            examRepository.save(exam);
+            return ResponseEntity.ok(Map.of("accessCode", newCode));
+        }).orElse(ResponseEntity.notFound().build());
     }
 
     @DeleteMapping("/{id}")

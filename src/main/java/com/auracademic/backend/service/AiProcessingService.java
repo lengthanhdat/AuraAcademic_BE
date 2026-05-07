@@ -53,8 +53,8 @@ public class AiProcessingService {
      */
     @Async
     public CompletableFuture<Void> processJob(String jobId, byte[] fileBytes, String filename, int count) {
-        log.info("[AiJob:{}] Bắt đầu xử lý — file: {}, số câu: {}",
-            jobId, filename, count);
+        long startTime = System.currentTimeMillis();
+        log.info("[AiJob:{}] Bắt đầu xử lý — file: {}, số câu: {}", jobId, filename, count);
 
         try {
             // ── Bước 1: Trích xuất văn bản từ tài liệu ────────────────
@@ -73,7 +73,7 @@ public class AiProcessingService {
 
             // ── Bước 2: Thử goi Gemini AI (Primary) ──────────────────
             List<Question> questions = null;
-            String usedProvider = "Gemini";
+            String usedProvider = "Gemini (gemini-2.5-flash)";
             try {
                 log.info("[AiJob:{}] Đang gọi Gemini AI...", jobId);
                 if (!extractedImages.isEmpty()) {
@@ -84,15 +84,13 @@ public class AiProcessingService {
             } catch (Exception geminiEx) {
                 log.warn("[AiJob:{}] Gemini thất bại: {}", jobId, geminiEx.getMessage());
 
-                // Nếu lỗi do hết quota (429 / RESOURCE_EXHAUSTED / API key bị khóa 403)
-                // → Tự động chuyển sang Groq
+                // Nếu lỗi do hết quota hoặc định dạng (theo logic fallback đã cấu hình)
                 if (isQuotaError(geminiEx)) {
-                    log.warn("[AiJob:{}] Gemini hết quota — Đang chuyển sang Groq dự phòng...", jobId);
-                    usedProvider = "Groq";
+                    log.warn("[AiJob:{}] Gemini có lỗi/hết quota — Đang chuyển sang Groq dự phòng...", jobId);
+                    usedProvider = "Groq (llama3-70b)";
                     questions = groqService.generateQuestions(extractedText, count);
                     log.info("[AiJob:{}] Groq sinh thành công {} câu hỏi", jobId, questions.size());
                 } else {
-                    // Lỗi khác (network, format...) → ném lại để xử lý bình thường
                     throw geminiEx;
                 }
             }
@@ -101,13 +99,17 @@ public class AiProcessingService {
             AiJob job = aiJobRepository.findById(jobId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy job: " + jobId));
 
+            long duration = System.currentTimeMillis() - startTime;
             job.setStatus("DONE");
             job.setQuestions(questions);
             job.setExtractedText(extractedText);
             job.setExtractedImages(extractedImages);
+            job.setProvider(usedProvider);
+            job.setProcessingTimeMs(duration);
             aiJobRepository.save(job);
 
-            log.info("[AiJob:{}] Hoàn thành (provider: {}) — {} câu hỏi đã được tạo", jobId, usedProvider, questions.size());
+            log.info("[AiJob:{}] Hoàn thành (provider: {}) — {} câu hỏi trong {}ms", 
+                jobId, usedProvider, questions.size(), duration);
 
         } catch (Exception e) {
             log.error("[AiJob:{}] Thất bại — {}", jobId, e.getMessage(), e);
@@ -135,8 +137,12 @@ public class AiProcessingService {
     }
 
     /**
-     * Kiểm tra xem exception có phải do hết quota / API key bị khóa không.
-     * Bao gồm: 429 Rate Limit, RESOURCE_EXHAUSTED, và 403 với thông báo lộ key của Google.
+     * Kiểm tra xem exception có cần fallback sang Groq không.
+     * Kích hoạt khi:
+     *   - 429 / RESOURCE_EXHAUSTED / quota: Gemini hết lượt free
+     *   - 403 permission_denied: API key bị khóa/lộ
+     *   - 503 / UNAVAILABLE: Gemini server quá tải hoặc tạm ngừng
+     *   - Lỗi parse JSON: thinking model trả về định dạng không hợp lệ
      */
     private boolean isQuotaError(Exception e) {
         String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
@@ -145,7 +151,15 @@ public class AiProcessingService {
             || msg.contains("ratequota")
             || msg.contains("quota")
             || (msg.contains("403") && msg.contains("permission_denied"))
-            || msg.contains("reported as leaked");
+            || msg.contains("reported as leaked")
+            // 503: Gemini server quá tải hoặc tạm thời không khả dụng → fallback Groq
+            || msg.contains("503")
+            || msg.contains("unavailable")
+            // Fallback khi Gemini trả về định dạng không hợp lệ (thinking model, parse fail)
+            || msg.contains("định dạng không hợp lệ")
+            || msg.contains("thought hoặc rỗng")
+            || msg.contains("content null")
+            || msg.contains("candidates rỗng");
     }
 
     /** Chuyển exception thành thông báo lỗi thân thiện với người dùng */
