@@ -1,6 +1,7 @@
 package com.auracademic.backend.dto;
 
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
 /**
@@ -18,6 +19,7 @@ public class ParsedQuestion {
         private String id;          // "a", "b", "c", "d"
         private String label;       // "A", "B", "C", "D"
         private String text;        // Noi dung lua chon
+        @JsonProperty("isCorrect")
         private boolean isCorrect;  // True neu duoc danh dau la dap an dung
 
         public String getId() { return id; }

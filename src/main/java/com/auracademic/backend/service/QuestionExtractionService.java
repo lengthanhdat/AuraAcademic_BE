@@ -8,6 +8,7 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.rendering.ImageType;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,7 +18,6 @@ import org.springframework.web.multipart.MultipartFile;
 import java.awt.image.BufferedImage;
 import javax.imageio.ImageIO;
 import java.io.ByteArrayOutputStream;
-
 import java.io.InputStream;
 import java.text.Normalizer;
 import java.util.*;
@@ -32,7 +32,8 @@ import org.w3c.dom.NodeList;
 import java.io.ByteArrayInputStream;
 
 /**
- * V3: Sua loi 4 dap an tren 1 dong, Unicode normalization, bo loc cau gia.
+ * V4: Su dung PDFTextStripper cho PDF co chu, fallback Gemini cho PDF scan anh.
+ * Sua loi text=null, 4 dap an tren 1 dong, Unicode normalization.
  */
 @Service
 public class QuestionExtractionService {
@@ -42,39 +43,22 @@ public class QuestionExtractionService {
     @Autowired
     private GeminiService geminiService;
 
-    /**
-     * Nhan dien so thu tu cau hoi sau khi strip dau tieng Viet.
-     * Match: "cau 1", "question 23:", "1."
-     */
     private static final Pattern QUESTION_NUMBER_STRIPPED = Pattern.compile(
         "^\\s*(cau|question|item|bai)?\\s*(\\d+)\\s*([.:)\\-\u2013]*)\\s*(.*)$"
     );
 
-    /**
-     * Nhan dien MOT option: "A. text", "A) text", "A- text"
-     */
     private static final Pattern SINGLE_OPTION = Pattern.compile(
         "^([A-Da-d])[.):–\\-]\\s*(.*)$"
     );
 
-    /**
-     * Tim vi tri chia cac option tren cung 1 dong.
-     */
     private static final Pattern OPTION_SPLIT = Pattern.compile(
         "(?<=\\S)\\s+(?=[A-Da-d][.):–\\-]\\s*)"
     );
 
-    /**
-     * Kiem tra dong co BAT DAU bang nhan option hay khong.
-     */
     private static final Pattern STARTS_WITH_OPTION = Pattern.compile(
         "^\\s*[A-Da-d][.):–\\-]\\s*.*"
     );
 
-    /**
-     * Strip diacritics: "C\u00e2u" -> "Cau", "c\u1ea7u" -> "cau".
-     * Dung NFD de tach combining marks, roi xoa chung.
-     */
     private static String stripDiacritics(String s) {
         return Normalizer.normalize(s, Normalizer.Form.NFD)
                          .replaceAll("\\p{M}", "");
@@ -89,7 +73,7 @@ public class QuestionExtractionService {
         if (filename == null) throw new IllegalArgumentException("Ten file khong hop le");
         String lower = filename.toLowerCase();
         if (lower.endsWith(".docx")) return extractFromDocx(file.getInputStream());
-        if (lower.endsWith(".pdf"))  return extractFromPdf(file.getInputStream());
+        if (lower.endsWith(".pdf"))  return extractFromPdf(file.getBytes(), filename);
         throw new IllegalArgumentException("Chi ho tro DOCX va PDF. File: " + filename);
     }
 
@@ -105,12 +89,11 @@ public class QuestionExtractionService {
             if (el instanceof XWPFParagraph para) {
                 String raw = extractParagraphText(para);
                 String image = extractImage(para);
-                // FIX: khong bo qua paragraph chi chua anh (text rong nhung co anh)
                 if ((raw == null || raw.isBlank()) && image == null) continue;
                 String text = (raw != null && !raw.isBlank())
                     ? Normalizer.normalize(raw, Normalizer.Form.NFC).trim()
                     : "";
-                boolean bold  = isBoldParagraph(para);
+                boolean bold = isBoldParagraph(para);
                 segments.add(new Segment(text, image, bold, false));
             } else if (el instanceof XWPFTable tbl) {
                 String md = tableToMarkdown(tbl);
@@ -122,7 +105,101 @@ public class QuestionExtractionService {
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // CORE PARSER
+    // PDF — dung PDFTextStripper truoc (khong can AI),
+    //        fallback Gemini chi khi PDF la file scan (khong co chu)
+    // ─────────────────────────────────────────────────────────────────
+
+    private List<ParsedQuestion> extractFromPdf(byte[] bytes, String filename) throws Exception {
+        try {
+            PDDocument pdDoc = Loader.loadPDF(bytes);
+            PDFTextStripper stripper = new PDFTextStripper();
+            String rawText = stripper.getText(pdDoc);
+            pdDoc.close();
+
+            if (rawText != null && !rawText.isBlank()) {
+                log.info("[Extract] PDF '{}' text extracted: {} chars", filename, rawText.length());
+                List<Segment> segments = new ArrayList<>();
+                for (String line : rawText.split("\n")) {
+                    String normalized = Normalizer.normalize(line, Normalizer.Form.NFC).trim();
+                    if (!normalized.isEmpty()) {
+                        segments.add(new Segment(normalized, null, false, false));
+                    }
+                }
+                List<ParsedQuestion> result = parseSegments(segments);
+                if (!result.isEmpty()) {
+                    log.info("[Extract] PDF text parsing: {} cau hoi", result.size());
+                    return result;
+                }
+                log.warn("[Extract] PDF text parsed 0 cau hoi, thu Gemini fallback...");
+            } else {
+                log.warn("[Extract] PDF '{}' text rong (co the la PDF scan), thu Gemini fallback...", filename);
+            }
+
+            return extractFromPdfWithAI(bytes);
+
+        } catch (Exception e) {
+            log.error("[Extract] Loi extract PDF '{}': {}", filename, e.getMessage());
+            throw e;
+        }
+    }
+
+    /** Fallback cho PDF scan (chi co anh): dung Gemini Vision de nhan dien chu */
+    private List<ParsedQuestion> extractFromPdfWithAI(byte[] bytes) throws Exception {
+        PDDocument pdDoc = Loader.loadPDF(bytes);
+        PDFRenderer renderer = new PDFRenderer(pdDoc);
+        List<String> base64Images = new ArrayList<>();
+
+        log.info("[Extract] Rendering {} trang PDF thanh anh cho Gemini...", pdDoc.getNumberOfPages());
+        for (int i = 0; i < pdDoc.getNumberOfPages(); i++) {
+            BufferedImage image = renderer.renderImageWithDPI(i, 150, ImageType.RGB);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            ImageIO.write(image, "jpeg", baos);
+            base64Images.add(Base64.getEncoder().encodeToString(baos.toByteArray()));
+        }
+        pdDoc.close();
+
+        String prompt = "Trich xuat TOAN BO cau hoi trac nghiem tu cac hinh anh trang PDF nay. " +
+                        "Tach biet phan cau hoi va phan dap an A, B, C, D ro rang. " +
+                        "Danh dau dap an dung neu co dau hieu trong anh (to dam, gach chan, dau sao).";
+
+        log.info("[Extract] Goi Gemini Vision de phan tich PDF scan...");
+        List<Question> aiQuestions = geminiService.refineQuestions(prompt, "", base64Images);
+
+        List<ParsedQuestion> result = new ArrayList<>();
+        int qCounter = 1;
+        for (Question q : aiQuestions) {
+            ParsedQuestion pq = new ParsedQuestion();
+            pq.setId("q" + (qCounter++));
+            // Luon dam bao text khong null
+            String qText = (q.getText() != null && !q.getText().isBlank())
+                ? q.getText()
+                : "(Cau hoi tu PDF scan - vui long nhap thu cong)";
+            pq.setText(qText);
+            pq.setImageBase64(q.getImageUrl());
+
+            List<ParsedQuestion.ParsedOption> options = new ArrayList<>();
+            if (q.getOptions() != null) {
+                for (com.auracademic.backend.model.Option o : q.getOptions()) {
+                    ParsedQuestion.ParsedOption po = new ParsedQuestion.ParsedOption();
+                    String lbl = (o.getId() != null && o.getId().length() == 1)
+                        ? o.getId().toUpperCase() : "?";
+                    po.setId(o.getId() != null ? o.getId().toLowerCase() : "?");
+                    po.setLabel(lbl);
+                    po.setText(o.getText() != null ? o.getText() : "");
+                    po.setCorrect(o.isCorrect());
+                    options.add(po);
+                }
+            }
+            pq.setOptions(options);
+            result.add(pq);
+        }
+
+        log.info("[Extract] Gemini Vision trich xuat {} cau hoi tu PDF scan", result.size());
+        return result;
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // CORE PARSER (dung chung cho DOCX va PDF text)
     // ─────────────────────────────────────────────────────────────────
 
     private List<ParsedQuestion> parseSegments(List<Segment> segments) {
@@ -135,27 +212,17 @@ public class QuestionExtractionService {
 
         for (Segment seg : segments) {
             String text = seg.text;
-
-            // 1. NFC normalize
             text = Normalizer.normalize(text, Normalizer.Form.NFC).trim();
 
-            // 2. Kiem tra bat dau cau hoi moi
             String stripped = stripDiacritics(text).toLowerCase();
             Matcher qm = QUESTION_NUMBER_STRIPPED.matcher(stripped);
             if (qm.matches()) {
                 String prefix = qm.group(1);
-                String punct = qm.group(3);
-                // Chi chap nhan neu co prefix ("cau", "bai"...) hoac neu khong co prefix thi phai co dau cau (nhu "1.")
+                String punct  = qm.group(3);
                 if (prefix != null || !punct.isEmpty()) {
                     if (current != null) flush(current, qText, opts, currentImg, result);
-                    
-                    String afterLabel = qm.group(4);
-                    // Giu nguyen text goc cua phan afterLabel bang cach cat tu chuoi GOC
-                    // Do chieu dai prefix va number trong chuoi goc co the khac stripped, 
-                    // ta dung regex de thay the dung phan dau:
                     String originalAfterLabel = text.replaceFirst(
                         "(?i)^\\s*(?:[Cc][\\p{L}]*u|[Qq]uestion|[Ii]tem|[Bb][\\p{L}]*i)?\\s*\\d+\\s*[.:)\\-\u2013]*\\s*", "").trim();
-                    
                     qCounter++;
                     current = new ParsedQuestion();
                     current.setId("q" + qCounter);
@@ -168,7 +235,6 @@ public class QuestionExtractionService {
 
             if (current == null) continue;
 
-            // 3. Kiem tra line nay co chua option khong
             if (STARTS_WITH_OPTION.matcher(text).matches()) {
                 List<ParsedQuestion.ParsedOption> parsed = parseOptionLine(text, seg.bold);
                 if (!parsed.isEmpty()) {
@@ -177,23 +243,15 @@ public class QuestionExtractionService {
                 }
             }
 
-            // 4. Noi dung bo sung (multi-line hoac giai thich)
             if (!opts.isEmpty()) {
-                // Neu da co option, append vao option CUOI CUNG (ho tro multi-line option hoac explanation)
                 ParsedQuestion.ParsedOption lastOpt = opts.get(opts.size() - 1);
                 String currentOptText = lastOpt.getText() != null ? lastOpt.getText() : "";
                 if (!text.isEmpty()) {
                     lastOpt.setText(currentOptText + (currentOptText.isEmpty() ? "" : "\n") + text);
                 }
-                // Neu co anh trong doan nay, gan vao cau hoi neu cau hoi chua co anh
-                if (seg.image != null && currentImg == null) {
-                    currentImg = seg.image;
-                }
+                if (seg.image != null && currentImg == null) currentImg = seg.image;
             } else {
-                // Chua co option, append vao noi dung cau hoi
-                if (seg.image != null && currentImg == null) {
-                    currentImg = seg.image;
-                }
+                if (seg.image != null && currentImg == null) currentImg = seg.image;
                 if (!text.isEmpty()) {
                     if (qText.length() > 0) qText.append("\n");
                     qText.append(text);
@@ -201,10 +259,8 @@ public class QuestionExtractionService {
             }
         }
 
-        // Luu cau cuoi
         if (current != null) flush(current, qText, opts, currentImg, result);
 
-        // Loc cau gia: tat ca option deu rong
         result.removeIf(q -> q.getOptions() == null
             || q.getOptions().stream().allMatch(o -> o.getText() == null || o.getText().isBlank()));
 
@@ -212,38 +268,20 @@ public class QuestionExtractionService {
         return result;
     }
 
-    /**
-     * Phan tich mot dong co the chua 1, 2, hoac 4 option.
-     * Luon split truoc bang OPTION_SPLIT, sau do match tung phan.
-     *
-     * Vi du:
-     *   "A. Cáo. B. Cào cào. C. Cỏ. D. Chim sẻ." -> 4 options
-     *   "A. Cáo.    B. Cào cào."                   -> 2 options
-     *   "A. Cáo."                                  -> 1 option
-     */
     private List<ParsedQuestion.ParsedOption> parseOptionLine(String text, boolean bold) {
         List<ParsedQuestion.ParsedOption> list = new ArrayList<>();
-
-        // Tach tai cac vi tri giua option
         String[] parts = OPTION_SPLIT.split(text.trim());
-
         for (String part : parts) {
             part = part.trim();
             if (part.isEmpty()) continue;
             Matcher m = SINGLE_OPTION.matcher(part);
-            if (!m.matches()) {
-                // Thu them toan bo dong neu la phan dau khong co label (edge case)
-                continue;
-            }
+            if (!m.matches()) continue;
             String label   = m.group(1).toUpperCase();
             String optText = m.group(2).trim();
             boolean correct = bold || optText.endsWith("*");
             if (optText.endsWith("*")) optText = optText.substring(0, optText.length() - 1).trim();
-
-            // Tranh them trung label
             boolean duplicate = list.stream().anyMatch(o -> o.getLabel().equals(label));
             if (duplicate) continue;
-
             ParsedQuestion.ParsedOption opt = new ParsedQuestion.ParsedOption();
             opt.setId(label.toLowerCase());
             opt.setLabel(label);
@@ -254,9 +292,6 @@ public class QuestionExtractionService {
         return list;
     }
 
-    /**
-     * Luu cau hoi, dam bao du 4 option, sap xep A-B-C-D.
-     */
     private void flush(
         ParsedQuestion q,
         StringBuilder textBuilder,
@@ -265,20 +300,17 @@ public class QuestionExtractionService {
         List<ParsedQuestion> list
     ) {
         String text = textBuilder.toString().trim();
-        // FIX: luu ca cau chi co anh (text rong nhung co image + options)
         boolean hasOptions = opts.stream().anyMatch(o -> o.getText() != null && !o.getText().isBlank());
         if (text.isEmpty() && image == null && !hasOptions) return;
-        // Neu text rong nhung co anh, dung placeholder
+        // Luon dam bao text khong bao gio la null
         if (text.isEmpty()) text = "(Xem hinh trong de)";
 
         q.setText(text);
         q.setImageBase64(image);
 
-        // Gop nhom: giu option cuoi cung neu co trung label
         Map<String, ParsedQuestion.ParsedOption> dedupe = new LinkedHashMap<>();
         for (ParsedQuestion.ParsedOption o : opts) dedupe.put(o.getLabel(), o);
 
-        // Dam bao co du A B C D (them rong neu thieu)
         String[] labels = {"A", "B", "C", "D"};
         for (String lbl : labels) {
             if (!dedupe.containsKey(lbl)) {
@@ -300,31 +332,27 @@ public class QuestionExtractionService {
     // ─────────────────────────────────────────────────────────────────
 
     private boolean isBoldParagraph(XWPFParagraph para) {
-        return para.getRuns().stream()
-            .anyMatch(r -> Boolean.TRUE.equals(r.isBold()) && r.text() != null && !r.text().isBlank());
+        return para.getRuns().stream().anyMatch(r -> r.isBold());
     }
 
     private String extractImage(XWPFParagraph para) {
-        try {
-            for (XWPFRun run : para.getRuns()) {
-                List<XWPFPicture> pics = run.getEmbeddedPictures();
-                if (pics != null && !pics.isEmpty()) {
+        for (XWPFRun run : para.getRuns()) {
+            List<XWPFPicture> pics = run.getEmbeddedPictures();
+            if (pics != null && !pics.isEmpty()) {
+                try {
                     byte[] data = pics.get(0).getPictureData().getData();
-                    String mime = pics.get(0).getPictureData().getPackagePart().getContentType();
-                    if (mime == null || mime.isBlank()) mime = "image/png";
-                    return "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(data);
+                    return Base64.getEncoder().encodeToString(data);
+                } catch (Exception e) {
+                    log.warn("[Extract] Khong the doc anh tu DOCX: {}", e.getMessage());
                 }
             }
-        } catch (Exception e) {
-            log.warn("[Extract] Anh loi: {}", e.getMessage());
         }
         return null;
     }
 
-    private String tableToMarkdown(XWPFTable table) {
+    private String tableToMarkdown(XWPFTable tbl) {
         StringBuilder sb = new StringBuilder();
-        List<XWPFTableRow> rows = table.getRows();
-        if (rows.isEmpty()) return "";
+        List<XWPFTableRow> rows = tbl.getRows();
         for (int r = 0; r < rows.size(); r++) {
             List<XWPFTableCell> cells = rows.get(r).getTableCells();
             sb.append("| ");
@@ -355,7 +383,7 @@ public class QuestionExtractionService {
             Document doc = builder.parse(new ByteArrayInputStream(xml.getBytes("UTF-8")));
             return parseNode(doc.getDocumentElement()).trim();
         } catch (Exception e) {
-            log.warn("[Extract] Loi parse XML doan van co cong thuc Toan, fallback ve getText(): {}", e.getMessage());
+            log.warn("[Extract] Loi parse XML cong thuc Toan, fallback getText(): {}", e.getMessage());
             return para.getText();
         }
     }
@@ -414,7 +442,7 @@ public class QuestionExtractionService {
                 if ("deg".equals(childName)) deg = parseNode(child);
                 else if ("e".equals(childName)) e = parseNode(child);
             }
-            if (deg.isEmpty()) return "√(" + e + ")";
+            if (deg.isEmpty()) return "\u221a(" + e + ")";
             return "root(" + deg + ")(" + e + ")";
         } else if ("t".equals(name)) {
             return node.getTextContent();
@@ -441,63 +469,6 @@ public class QuestionExtractionService {
             name = name.substring(name.indexOf(":") + 1);
         }
         return name;
-    }
-
-    // ─────────────────────────────────────────────────────────────────
-    // PDF
-    // ─────────────────────────────────────────────────────────────────
-
-    private List<ParsedQuestion> extractFromPdf(InputStream is) throws Exception {
-        byte[] bytes = is.readAllBytes();
-        PDDocument pdDoc = Loader.loadPDF(bytes);
-        PDFRenderer renderer = new PDFRenderer(pdDoc);
-        List<String> base64Images = new ArrayList<>();
-        
-        log.info("[Extract] Rendering {} pages from PDF to images for AI processing...", pdDoc.getNumberOfPages());
-        for (int i = 0; i < pdDoc.getNumberOfPages(); i++) {
-            BufferedImage image = renderer.renderImageWithDPI(i, 150, ImageType.RGB);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            ImageIO.write(image, "jpeg", baos);
-            byte[] imageBytes = baos.toByteArray();
-            base64Images.add(Base64.getEncoder().encodeToString(imageBytes));
-        }
-        pdDoc.close();
-
-        String prompt = "Trích xuất TOÀN BỘ câu hỏi trắc nghiệm từ các hình ảnh trang PDF này. " +
-                        "QUY TẮC BẮT BUỘC:\n" +
-                        "1. CHUYỂN ĐỔI TẤT CẢ CÁC CÔNG THỨC TOÁN HỌC thành định dạng LaTeX (bọc trong `$ ... $` hoặc `$$ ... $$`).\n" +
-                        "2. Giữ nguyên các định dạng bảng biểu nếu có bằng Markdown.\n" +
-                        "3. Tách biệt phần câu hỏi và phần đáp án A, B, C, D rõ ràng.\n" +
-                        "4. Đánh dấu đáp án đúng nếu có dấu hiệu trong ảnh, nếu không thì mặc định chọn A.";
-        
-        log.info("[Extract] Goi Gemini AI de phan tich PDF...");
-        List<Question> aiQuestions = geminiService.refineQuestions(prompt, "", base64Images);
-        
-        List<ParsedQuestion> result = new ArrayList<>();
-        int qCounter = 1;
-        for (Question q : aiQuestions) {
-            ParsedQuestion pq = new ParsedQuestion();
-            pq.setId("q" + (qCounter++));
-            pq.setText(q.getText());
-            pq.setImageBase64(q.getImageUrl());
-            
-            List<ParsedQuestion.ParsedOption> options = new ArrayList<>();
-            if (q.getOptions() != null) {
-                for (com.auracademic.backend.model.Option o : q.getOptions()) {
-                    ParsedQuestion.ParsedOption po = new ParsedQuestion.ParsedOption();
-                    String lbl = (o.getId() != null && o.getId().length() == 1) ? o.getId().toUpperCase() : "?";
-                    po.setId(o.getId() != null ? o.getId().toLowerCase() : "?");
-                    po.setLabel(lbl);
-                    po.setText(o.getText());
-                    po.setCorrect(o.isCorrect());
-                    options.add(po);
-                }
-            }
-            pq.setOptions(options);
-            result.add(pq);
-        }
-        
-        return result;
     }
 
     private record Segment(String text, String image, boolean bold, boolean isTable) {}
