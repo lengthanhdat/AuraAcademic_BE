@@ -37,15 +37,14 @@ public class MaterialService {
             "data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;",
             "data:video/",
             "data:image/",
-            "http://", "https://"
-    );
+            "http://", "https://");
 
     public MaterialService(MaterialRepository materialRepository,
-                           UserRepository userRepository,
-                           AuditLogService auditLogService,
-                           GeminiService geminiService,
-                           FileTextExtractorService fileTextExtractorService,
-                           ProfanityFilterService profanityFilterService) {
+            UserRepository userRepository,
+            AuditLogService auditLogService,
+            GeminiService geminiService,
+            FileTextExtractorService fileTextExtractorService,
+            ProfanityFilterService profanityFilterService) {
         this.materialRepository = materialRepository;
         this.userRepository = userRepository;
         this.auditLogService = auditLogService;
@@ -68,12 +67,13 @@ public class MaterialService {
         }
     }
 
-    /** Upload material:
-     *  - Admin  → lưu thẳng vào DB với status "published"
-     *  - Teacher → AI kiểm duyệt ĐỒNG BỘ trước khi lưu:
-     *              - AI duyệt  → lưu với status "published", tag được bổ sung
-     *              - AI từ chối → ném lỗi ngay, KHÔNG lưu vào DB
-     *              - AI bị lỗi  → lưu với status "pending_review" để Admin duyệt thủ công
+    /**
+     * Upload material:
+     * - Admin → lưu thẳng vào DB với status "published"
+     * - Teacher → AI kiểm duyệt ĐỒNG BỘ trước khi lưu:
+     * - AI duyệt → lưu với status "published", tag được bổ sung
+     * - AI từ chối → ném lỗi ngay, KHÔNG lưu vào DB
+     * - AI bị lỗi → lưu với status "pending_review" để Admin duyệt thủ công
      */
     @SuppressWarnings("unchecked")
     public Material upload(String userId, String role, Map<String, Object> req, String ip) {
@@ -86,19 +86,20 @@ public class MaterialService {
         var user = userRepository.findById(userId)
                 .orElseThrow(() -> new AuthException("Không tìm thấy người dùng."));
 
-        String title       = (String) req.getOrDefault("title", "");
+        String title = (String) req.getOrDefault("title", "");
         String description = (String) req.getOrDefault("description", "");
-        String subject     = (String) req.getOrDefault("subject", "");
-        String category    = (String) req.getOrDefault("category", "reference");
-        String fileType    = (String) req.getOrDefault("fileType", "pdf");
-        List<String> tags  = (List<String>) req.getOrDefault("tags", List.of());
+        String subject = (String) req.getOrDefault("subject", "");
+        String category = (String) req.getOrDefault("category", "reference");
+        String fileType = (String) req.getOrDefault("fileType", "pdf");
+        List<String> tags = (List<String>) req.getOrDefault("tags", List.of());
 
         // ── AI gate: chỉ áp dụng cho giảng viên ──────────────────────────────
         String initialStatus = "teacher".equals(role) ? "pending_review" : "published";
         List<String> finalTags = new java.util.ArrayList<>(tags);
 
         if ("teacher".equals(role)) {
-            // ── Lớp 1: Pre-filter cứng (Java) — scan TOÀN BỘ văn bản, không giới hạn ───────
+            // ── Lớp 1: Pre-filter cứng (Java) — scan TOÀN BỘ văn bản, không giới hạn
+            // ───────
             String fullText = fileTextExtractorService.extractFullText(fileUrl, fileType);
             log.info("[Pre-Filter] Trích xuất {} ký tự (toàn bộ) từ file '{}'", fullText.length(), fileName);
 
@@ -111,8 +112,8 @@ public class MaterialService {
                             null, false,
                             "BLOCKED[PROFANITY-PREFILTER]: " + title + " — Từ cấm: '" + blocked + "'");
                     throw new AuthException(
-                        "Tài liệu bị từ chối: Phát hiện từ ngữ không phù hợp ('" + blocked + "'). " +
-                        "Vui lòng kiểm tra lại toàn bộ nội dung tài liệu.");
+                            "Tài liệu bị từ chối: Phát hiện từ ngữ không phù hợp. " +
+                                    "Vui lòng kiểm tra lại toàn bộ nội dung tài liệu.");
                 }
 
                 log.info("[Pre-Filter] Văn bản sạch, tiếp tục gửi Gemini AI kiểm duyệt.");
@@ -128,8 +129,8 @@ public class MaterialService {
                 Map<String, Object> aiResult = geminiService.reviewMaterial(
                         title, description, subject, fileType, category, fileName, extractedContent);
 
-                boolean approved    = Boolean.TRUE.equals(aiResult.get("approved"));
-                String reason       = (String) aiResult.getOrDefault("reason", "");
+                boolean approved = Boolean.TRUE.equals(aiResult.get("approved"));
+                String reason = (String) aiResult.getOrDefault("reason", "");
                 String violationType = (String) aiResult.getOrDefault("violationType", "NONE");
 
                 if (!approved) {
@@ -195,14 +196,20 @@ public class MaterialService {
             throw new AuthException("Bạn không có quyền chỉnh sửa tài liệu này.");
         }
 
-        if (req.containsKey("title")) m.setTitle((String) req.get("title"));
-        if (req.containsKey("description")) m.setDescription((String) req.get("description"));
-        if (req.containsKey("subject")) m.setSubject((String) req.get("subject"));
-        if (req.containsKey("category")) m.setCategory((String) req.get("category"));
-        if (req.containsKey("tags")) m.setTags((List<String>) req.get("tags"));
+        if (req.containsKey("title"))
+            m.setTitle((String) req.get("title"));
+        if (req.containsKey("description"))
+            m.setDescription((String) req.get("description"));
+        if (req.containsKey("subject"))
+            m.setSubject((String) req.get("subject"));
+        if (req.containsKey("category"))
+            m.setCategory((String) req.get("category"));
+        if (req.containsKey("tags"))
+            m.setTags((List<String>) req.get("tags"));
         m.setUpdatedAt(LocalDateTime.now());
         // Reset to pending_review when teacher edits
-        if ("teacher".equals(role)) m.setStatus("pending_review");
+        if ("teacher".equals(role))
+            m.setStatus("pending_review");
 
         materialRepository.save(m);
         var user = userRepository.findById(userId).orElse(null);

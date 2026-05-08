@@ -31,7 +31,7 @@ public class ProfanityFilterService {
     // ── LỚP 2: Từ viết tắt bậy hoặc ngoại ngữ (Kiểm tra ranh giới từ trên văn bản chuẩn hóa không dấu) ──
     private static final List<String> BLOCKED_WITHOUT_DIACRITICS = List.of(
         // Viết tắt tiếng Việt
-        "vcl", "vkl", "clm", "dcm", "dmm", "duma", "dume", "duba", "diemay",
+        "dit", "vcl", "vkl", "clm", "dcm", "dmm", "duma", "dume", "duba", "diemay",
         // Tiếng Anh
         "fuck", "fuk", "fck", "bitch", "btch", "cunt", "cnt", "motherfucker",
         // Tiếng Trung/Hàn/Nhật
@@ -77,7 +77,6 @@ public class ProfanityFilterService {
      */
     private String cleanOriginalText(String text) {
         String s = text.toLowerCase();
-        s = s.replace("đ", "d"); // chuẩn hóa chữ đ
         // Giữ chữ cái tiếng Việt có dấu và số, thay ký tự khác bằng khoảng trắng
         s = s.replaceAll("[^a-z0-9\\u00e0-\\u00fa\\u0102\\u0103\\u0110\\u0111\\u0128\\u0129\\u0168\\u0169\\u01a0\\u01a1\\u01af\\u01b0\\u1ea0-\\u1ef9]", " ");
         return s.replaceAll("\\s+", " ").trim();

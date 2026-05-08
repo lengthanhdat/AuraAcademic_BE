@@ -85,6 +85,17 @@ public class FileTextExtractorService {
                     sb.append(text).append('\n');
                 }
             });
+            doc.getTables().forEach(table -> {
+                table.getRows().forEach(row -> {
+                    row.getTableCells().forEach(cell -> {
+                        String text = cell.getText();
+                        if (text != null && !text.isBlank()) {
+                            sb.append(text).append(' ');
+                        }
+                    });
+                    sb.append('\n');
+                });
+            });
             return sb.toString().strip();
         }
     }
@@ -94,7 +105,7 @@ public class FileTextExtractorService {
     private String extractPdf(byte[] bytes) throws Exception {
         try (PDDocument doc = Loader.loadPDF(bytes)) {
             PDFTextStripper stripper = new PDFTextStripper();
-            stripper.setEndPage(Math.min(doc.getNumberOfPages(), 5)); // Chỉ scan 5 trang đầu
+            stripper.setSortByPosition(true); // Sắp xếp theo vị trí tọa độ giúp đọc chuẩn dòng cột
             return stripper.getText(doc).strip();
         }
     }
@@ -104,7 +115,7 @@ public class FileTextExtractorService {
     private String extractPptx(byte[] bytes) throws Exception {
         try (XMLSlideShow ppt = new XMLSlideShow(new ByteArrayInputStream(bytes))) {
             StringBuilder sb = new StringBuilder();
-            ppt.getSlides().stream().limit(10).forEach(slide -> { // Chỉ scan 10 slide đầu
+            ppt.getSlides().forEach(slide -> { // Quét toàn bộ slide không giới hạn
                 slide.getShapes().forEach(shape -> {
                     try {
                         if (shape instanceof org.apache.poi.xslf.usermodel.XSLFTextShape ts) {
@@ -112,6 +123,16 @@ public class FileTextExtractorService {
                             if (text != null && !text.isBlank()) {
                                 sb.append(text).append('\n');
                             }
+                        } else if (shape instanceof org.apache.poi.xslf.usermodel.XSLFTable table) {
+                            table.getRows().forEach(row -> {
+                                row.getCells().forEach(cell -> {
+                                    String text = cell.getText();
+                                    if (text != null && !text.isBlank()) {
+                                        sb.append(text).append(' ');
+                                    }
+                                });
+                                sb.append('\n');
+                            });
                         }
                     } catch (Exception ignored) {}
                 });
