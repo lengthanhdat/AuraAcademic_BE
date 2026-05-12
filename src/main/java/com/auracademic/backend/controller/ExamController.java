@@ -61,6 +61,17 @@ public class ExamController {
 
     @PostMapping("/{code}/heartbeat")
     public ResponseEntity<?> heartbeat(@PathVariable String code, @RequestBody Map<String, String> body) {
+        // Auto-start trigger
+        examRepository.findByAccessCode(code.toUpperCase()).ifPresent(exam -> {
+            if ("PUBLISHED".equals(exam.getStatus()) && exam.getScheduledStartTime() != null && System.currentTimeMillis() >= exam.getScheduledStartTime()) {
+                exam.setStatus("STARTED");
+                exam.setStartTime(exam.getScheduledStartTime());
+                examRepository.save(exam);
+                examEventService.broadcast(exam.getAccessCode(), "status",
+                    Map.of("status", "STARTED", "startTime", exam.getStartTime()));
+            }
+        });
+
         String studentId = body.get("studentId");
         String status = body.getOrDefault("status", "LOBBY"); // "LOBBY" hoặc "EXAM"
         if (studentId != null && !studentId.isBlank()) {
@@ -74,7 +85,12 @@ public class ExamController {
                 "examCount",  examCount
             ));
         }
-        return ResponseEntity.ok().build();
+        // Retrieve current exam status to return as fallback
+        String currentStatus = examRepository.findByAccessCode(code.toUpperCase())
+            .map(Exam::getStatus)
+            .orElse("UNKNOWN");
+
+        return ResponseEntity.ok(Map.of("status", currentStatus));
     }
 
     @GetMapping("/{code}/active-count")
@@ -148,6 +164,15 @@ public class ExamController {
     public ResponseEntity<?> getLobbyInfo(@PathVariable String code) {
         return examRepository.findByAccessCode(code.toUpperCase())
                 .map(exam -> {
+                    // Auto-start logic
+                    if ("PUBLISHED".equals(exam.getStatus()) && exam.getScheduledStartTime() != null && System.currentTimeMillis() >= exam.getScheduledStartTime()) {
+                        exam.setStatus("STARTED");
+                        exam.setStartTime(exam.getScheduledStartTime());
+                        examRepository.save(exam);
+                        examEventService.broadcast(exam.getAccessCode(), "status",
+                            Map.of("status", "STARTED", "startTime", exam.getStartTime()));
+                    }
+
                     if ("DRAFT".equals(exam.getStatus())) {
                         return ResponseEntity.badRequest().body("Phòng thi này chưa được mở.");
                     }
@@ -160,6 +185,8 @@ public class ExamController {
                     info.put("status", exam.getStatus());
                     info.put("accessCode", exam.getAccessCode());
                     info.put("startTime", exam.getStartTime());
+                    info.put("scheduledStartTime", exam.getScheduledStartTime());
+                    info.put("aiProctoring", exam.isAiProctoring()); // Cần thiết để bật/tắt UI giám sát tại phòng chờ
                     return ResponseEntity.ok(info);
                 })
                 .orElse(ResponseEntity.status(404).body("Mã phòng thi không tồn tại."));
@@ -169,6 +196,15 @@ public class ExamController {
     public ResponseEntity<?> joinExam(@PathVariable String code) {
         return examRepository.findByAccessCode(code.toUpperCase())
                 .map(exam -> {
+                    // Auto-start logic
+                    if ("PUBLISHED".equals(exam.getStatus()) && exam.getScheduledStartTime() != null && System.currentTimeMillis() >= exam.getScheduledStartTime()) {
+                        exam.setStatus("STARTED");
+                        exam.setStartTime(exam.getScheduledStartTime());
+                        examRepository.save(exam);
+                        examEventService.broadcast(exam.getAccessCode(), "status",
+                            Map.of("status", "STARTED", "startTime", exam.getStartTime()));
+                    }
+
                     // Chỉ cho phép vào thi khi GV đã nhấn "Bắt đầu thi" (STARTED)
                     if (!"STARTED".equals(exam.getStatus())) {
                         if ("PUBLISHED".equals(exam.getStatus())) {
@@ -194,6 +230,7 @@ public class ExamController {
                     response.put("versionCode", selectedVersion.getVersionCode());
                     response.put("questions", selectedVersion.getQuestions());
                     response.put("extractedImages", exam.getExtractedImages()); // Cần thiết để hiển thị ảnh trong câu hỏi
+                    response.put("aiProctoring", exam.isAiProctoring()); // <-- Thêm cờ này để client quyết định bật AI hay không
                     
                     return ResponseEntity.ok(response);
                 })
@@ -203,7 +240,18 @@ public class ExamController {
     @GetMapping("/{id}")
     public ResponseEntity<?> getExamById(@PathVariable String id) {
         return examRepository.findById(id)
-                .map(ResponseEntity::ok)
+                .map(exam -> {
+                    // Auto-start logic: Chuyển sang STARTED nếu thời gian đã điểm
+                    if ("PUBLISHED".equals(exam.getStatus()) && exam.getScheduledStartTime() != null && System.currentTimeMillis() >= exam.getScheduledStartTime()) {
+                        exam.setStatus("STARTED");
+                        exam.setStartTime(exam.getScheduledStartTime());
+                        examRepository.save(exam);
+                        // Thông báo realtime cho tất cả client (giáo viên & học sinh)
+                        examEventService.broadcast(exam.getAccessCode(), "status",
+                            Map.of("status", "STARTED", "startTime", exam.getStartTime()));
+                    }
+                    return ResponseEntity.ok(exam);
+                })
                 .orElse(ResponseEntity.notFound().build());
     }
 

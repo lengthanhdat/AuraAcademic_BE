@@ -91,6 +91,43 @@ public class AIController {
     }
 
     // ─────────────────────────────────────────────────────────────────
+    // POST /api/ai/generate-from-prompt
+    // Tạo câu hỏi từ chủ đề / lời nhắc tự do — không cần upload file
+    // ─────────────────────────────────────────────────────────────────
+    @PostMapping("/generate-from-prompt")
+    public ResponseEntity<?> generateFromPrompt(@RequestBody Map<String, Object> body) {
+        String topic      = (String) body.getOrDefault("topic", "");
+        String difficulty = (String) body.getOrDefault("difficulty", "MEDIUM");
+        String language   = (String) body.getOrDefault("language", "vi");
+        int count         = body.get("count") instanceof Number n ? n.intValue() : 10;
+
+        if (topic == null || topic.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Vui lòng nhập chủ đề hoặc mô tả đề thi."));
+        }
+        if (count < 1 || count > 100) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Số câu hỏi phải trong khoảng 1 – 100."));
+        }
+
+        log.info("[API] Nhận yêu cầu tạo {} câu từ prompt: '{}' (độ khó: {}, ngôn ngữ: {})",
+                count, topic, difficulty, language);
+
+        // Tạo AiJob & kick off async
+        AiJob job = new AiJob();
+        job.setStatus("PROCESSING");
+        job.setCreatedAt(System.currentTimeMillis());
+        job = aiJobRepository.save(job);
+        final String jobId = job.getId();
+
+        aiProcessingService.processTopicJob(jobId, topic, difficulty, language, count);
+
+        return ResponseEntity.accepted().body(Map.of(
+            "jobId",   jobId,
+            "status",  "PROCESSING",
+            "message", "AI đang biên soạn đề thi. Polling tại /api/ai/jobs/" + jobId
+        ));
+    }
+
+    // ─────────────────────────────────────────────────────────────────
     // GET /api/ai/jobs/{jobId}
     // Frontend gọi endpoint này định kỳ (polling) để lấy kết quả
     // ─────────────────────────────────────────────────────────────────

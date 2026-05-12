@@ -19,6 +19,8 @@ public class Exam {
     private String status; // "DRAFT", "PUBLISHED", "FINISHED"
     private String accessCode; // Mã phòng thi (vd: A1B2C3)
     private Long startTime; // Thời điểm bắt đầu (timestamp)
+    private Long scheduledStartTime; // Thời điểm lên lịch bắt đầu tự động (timestamp)
+    private String difficulty; // "EASY", "MEDIUM", "HARD", "EXPERT"
     private List<ExamVersion> versions;
     private List<String> extractedImages; // Base64 images extracted from source document
     
@@ -105,6 +107,14 @@ public class Exam {
         this.startTime = startTime;
     }
 
+    public Long getScheduledStartTime() {
+        return scheduledStartTime;
+    }
+
+    public void setScheduledStartTime(Long scheduledStartTime) {
+        this.scheduledStartTime = scheduledStartTime;
+    }
+
     public List<ExamVersion> getVersions() {
         return versions;
     }
@@ -119,6 +129,14 @@ public class Exam {
 
     public void setExtractedImages(List<String> extractedImages) {
         this.extractedImages = extractedImages;
+    }
+
+    public String getDifficulty() {
+        return difficulty;
+    }
+
+    public void setDifficulty(String difficulty) {
+        this.difficulty = difficulty;
     }
 
     public long getSubmissionCount() {

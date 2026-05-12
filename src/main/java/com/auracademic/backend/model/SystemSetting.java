@@ -6,28 +6,26 @@ import org.springframework.data.mongodb.core.mapping.Document;
 @Document(collection = "system_settings")
 public class SystemSetting {
     @Id
-    private String id;
-    private String key;
-    private Object value;
-    private String type; // "boolean", "string", "number"
+    private String id; // key name, e.g., "gemini.api.key"
+    private String value;
+    private String description;
+    private Long lastUpdated;
 
     public SystemSetting() {}
 
-    public SystemSetting(String key, Object value, String type) {
-        this.key = key;
+    public SystemSetting(String id, String value, String description) {
+        this.id = id;
         this.value = value;
-        this.type = type;
+        this.description = description;
+        this.lastUpdated = System.currentTimeMillis();
     }
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
-    
-    public String getKey() { return key; }
-    public void setKey(String key) { this.key = key; }
-
-    public Object getValue() { return value; }
-    public void setValue(Object value) { this.value = value; }
-
-    public String getType() { return type; }
-    public void setType(String type) { this.type = type; }
+    public String getValue() { return value; }
+    public void setValue(String value) { this.value = value; }
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
+    public Long getLastUpdated() { return lastUpdated; }
+    public void setLastUpdated(Long lastUpdated) { this.lastUpdated = lastUpdated; }
 }

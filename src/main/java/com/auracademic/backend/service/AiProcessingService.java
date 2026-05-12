@@ -119,6 +119,57 @@ public class AiProcessingService {
         return CompletableFuture.completedFuture(null);
     }
 
+    /**
+     * Xử lý pipeline AI tạo câu hỏi từ chủ đề (không cần tài liệu).
+     * Sử dụng cùng cơ chế Async Job / Polling như processJob.
+     */
+    @Async
+    public CompletableFuture<Void> processTopicJob(String jobId, String topic, String difficulty, String language, int count) {
+        long startTime = System.currentTimeMillis();
+        log.info("[AiJob:{}] [Topic] Bắt đầu xử lý — chủ đề: '{}', độ khó: {}, số câu: {}", jobId, topic, difficulty, count);
+
+        try {
+            // Thử Gemini trước
+            List<Question> questions;
+            String usedProvider = "Gemini (gemini-2.5-flash)";
+            try {
+                questions = geminiService.generateByTopic(topic, difficulty, language, count);
+            } catch (Exception geminiEx) {
+                log.warn("[AiJob:{}] [Topic] Gemini thất bại: {}", jobId, geminiEx.getMessage());
+                if (isQuotaError(geminiEx)) {
+                    log.warn("[AiJob:{}] [Topic] Chuyển sang Groq dự phòng...", jobId);
+                    usedProvider = "Groq (llama3-70b)";
+                    // Groq fallback dùng lại extractedText là topic dưới dạng hướng dẫn
+                    String fallbackPrompt = "Chủ đề: " + topic + ". Độ khó: " + difficulty;
+                    questions = groqService.generateQuestions(fallbackPrompt, count);
+                } else {
+                    throw geminiEx;
+                }
+            }
+
+            // Lưu kết quả → DONE
+            AiJob job = aiJobRepository.findById(jobId)
+                .orElseThrow(() -> new RuntimeException("Không tìm thấy job: " + jobId));
+            long duration = System.currentTimeMillis() - startTime;
+            job.setStatus("DONE");
+            job.setQuestions(questions);
+            job.setExtractedText("[Generated from topic prompt] " + topic);
+            job.setExtractedImages(List.of());
+            job.setProvider(usedProvider);
+            job.setProcessingTimeMs(duration);
+            aiJobRepository.save(job);
+
+            log.info("[AiJob:{}] [Topic] Hoàn thành (provider: {}) — {} câu hỏi trong {}ms",
+                jobId, usedProvider, questions.size(), duration);
+
+        } catch (Exception e) {
+            log.error("[AiJob:{}] [Topic] Thất bại — {}", jobId, e.getMessage(), e);
+            failJob(jobId, buildUserFriendlyError(e));
+        }
+
+        return CompletableFuture.completedFuture(null);
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // HELPERS
     // ─────────────────────────────────────────────────────────────────

@@ -287,6 +287,8 @@ public class AuthService {
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
     private void checkAccountLock(User user) {
+        if ("admin".equalsIgnoreCase(user.getRole())) return; // Bỏ qua check khóa cho Admin
+        
         if (user.isAccountLocked()) {
             if (user.getLockExpiry() != null && user.getLockExpiry().isBefore(LocalDateTime.now())) {
                 // Mở khóa tự động
@@ -321,7 +323,8 @@ public class AuthService {
         int attempts = user.getFailedLoginAttempts() + 1;
         user.setFailedLoginAttempts(attempts);
 
-        if (enforceLock && attempts >= maxFailedAttempts) {
+        boolean isAdmin = "admin".equalsIgnoreCase(user.getRole());
+        if (enforceLock && attempts >= maxFailedAttempts && !isAdmin) {
             user.setAccountLocked(true);
             user.setLockExpiry(LocalDateTime.now().plusMinutes(lockDurationMinutes));
             auditLogService.log(user.getId(), user.getEmail(), "ACCOUNT_LOCKED", ipAddress, userAgent, false, "Locked after " + attempts + " failed attempts");

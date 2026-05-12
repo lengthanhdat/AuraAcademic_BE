@@ -6,6 +6,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -34,6 +35,13 @@ public class GroqService {
 
     @Value("${groq.api.key:}")
     private String apiKey;
+
+    @Autowired
+    private SettingService settingService;
+
+    private String getActiveApiKey() {
+        return settingService.getSetting("groq.api.key", this.apiKey);
+    }
 
     @Value("${groq.url}")
     private String apiUrl;
@@ -83,12 +91,29 @@ public class GroqService {
             1. Trích xuất nội dung câu hỏi và 4 phương án y như trong tài liệu gốc.
             2. QUAN TRỌNG: Phải tách BIỆT phần phương án (A, B, C, D) ra khỏi nội dung câu hỏi. Trường `text` của câu hỏi TUYỆT ĐỐI KHÔNG ĐƯỢC chứa các chữ A. B. C. D. hay nội dung của các phương án.
             3. ĐÁNH DẤU ĐÁP ÁN ĐÚNG: Mỗi câu hỏi phải có đủ 4 lựa chọn. Đánh dấu `isCorrect: true` cho đáp án đúng. Nếu không có gợi ý, mặc định chọn đáp án đầu tiên (A) là đúng.
-            4. Trả về DUY NHẤT một JSON array. Không giải thích gì thêm. Không dùng markdown (không có ```json).
-            5. Nếu tài liệu thực tế không có đủ %d câu hỏi, hãy trích xuất toàn bộ câu hỏi có trong đó, sau đó tự tạo thêm câu hỏi bám sát nội dung tài liệu để đủ đúng %d câu.
+            4. QUY TẮC BẮT BUỘC VỀ TOÁN HỌC: BẮT BUỘC sử dụng định dạng LaTeX (bọc trong `$ ... $` hoặc `$$ ... $$`) cho TẤT CẢ các công thức toán học, biến số, ký hiệu, phương trình trong cả nội dung câu hỏi lẫn các đáp án.
+            5. Trả về DUY NHẤT một JSON array. Không giải thích gì thêm. Không dùng markdown (không có ```json).
+            6. Nếu tài liệu thực tế không có đủ %d câu hỏi, hãy trích xuất toàn bộ câu hỏi có trong đó, sau đó tự tạo thêm câu hỏi bám sát nội dung tài liệu để đủ đúng %d câu.
 
             Định dạng JSON:
             [{"id":"1","type":"Trắc nghiệm","text":"Nội dung câu hỏi","options":[{"id":"a","text":"Nội dung A","isCorrect":true},{"id":"b","text":"Nội dung B","isCorrect":false},{"id":"c","text":"Nội dung C","isCorrect":false},{"id":"d","text":"Nội dung D","isCorrect":false}]}]
             """.formatted(text, count, count, count);
+    }
+
+    public Map<String, Object> checkHealth() {
+        String key = getActiveApiKey();
+        if (key == null || key.isBlank()) return Map.of("ok", false, "msg", "Chưa có token");
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setBearerAuth(key);
+            // Gõ thử model list của groq
+            restTemplate.exchange("https://api.groq.com/openai/v1/models", org.springframework.http.HttpMethod.GET, new HttpEntity<>(headers), String.class);
+            return Map.of("ok", true, "model", modelName, "rpm", "30 RPM", "tpm", "6,000 TPM", "rpd", "14,400 RPD");
+        } catch (HttpStatusCodeException e) {
+            return Map.of("ok", false, "msg", "Token không hợp lệ: HTTP " + e.getStatusCode().value());
+        } catch (Exception e) {
+            return Map.of("ok", false, "msg", "Lỗi kết nối: " + e.getMessage());
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -98,7 +123,7 @@ public class GroqService {
     private List<Question> callGroqApi(String prompt) throws Exception {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(apiKey);
+        headers.setBearerAuth(getActiveApiKey());
 
         Map<String, Object> message = Map.of(
             "role", "user",

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -38,6 +39,13 @@ public class GeminiService {
 
     @Value("${gemini.api.key}")
     private String apiKey;
+
+    @Autowired
+    private SettingService settingService;
+
+    private String getActiveApiKey() {
+        return settingService.getSetting("gemini.api.key", this.apiKey);
+    }
 
     // gemini-2.5-flash: model chính. parseResponse() đã xử lý đúng thinking parts.
     // Khi hết quota hoặc lỗi → AiProcessingService sẽ fallback sang Groq tự động.
@@ -116,6 +124,34 @@ public class GeminiService {
         log.error("[Gemini] Đã thử 3 lần nhưng vẫn thất bại (kèm ảnh). Lỗi cuối: {}", ex.getMessage());
         throw new RuntimeException(
             "AI không phản hồi sau 3 lần thử. Lý do: " + ex.getMessage(), ex
+        );
+    }
+
+    /**
+     * Sinh câu hỏi dựa trên chủ đề / lời nhắc tự do (không cần tài liệu).
+     * AI sẽ tự sử dụng kho kiến thức nội tại để biên soạn câu hỏi chuẩn sư phạm.
+     *
+     * @param topic       Chủ đề hoặc prompt mô tả yêu cầu đề thi (Tiếng Việt / Tiếng Anh)
+     * @param difficulty  Mức độ khó: EASY | MEDIUM | HARD | EXPERT
+     * @param language    Ngôn ngữ câu hỏi: "vi" (Tiếng Việt) | "en" (Tiếng Anh)
+     * @param count       Số lượng câu hỏi cần tạo
+     */
+    @Retryable(
+        retryFor  = { Exception.class },
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 2000, multiplier = 2.0)
+    )
+    public List<Question> generateByTopic(String topic, String difficulty, String language, int count) throws Exception {
+        log.info("[Gemini] Sinh {} câu hỏi từ chủ đề '{}' — độ khó: {}, ngôn ngữ: {}", count, topic, difficulty, language);
+        String prompt = buildTopicPrompt(topic, difficulty, language, count);
+        return callGeminiApi(prompt, PRIMARY_MODEL);
+    }
+
+    @Recover
+    public List<Question> recoverGenerateByTopic(Exception ex, String topic, String difficulty, String language, int count) {
+        log.error("[Gemini] generateByTopic thất bại sau 3 lần retry. Chủ đề: '{}', lỗi: {}", topic, ex.getMessage());
+        throw new RuntimeException(
+            "AI không thể tạo câu hỏi cho chủ đề này sau 3 lần thử. Lý do: " + ex.getMessage(), ex
         );
     }
 
@@ -248,6 +284,23 @@ public class GeminiService {
         }
     }
 
+    /** Kiểm tra sức sống và dung lượng token hiện tại */
+    public Map<String, Object> checkHealth() {
+        String key = getActiveApiKey();
+        if (key == null || key.isBlank()) return Map.of("ok", false, "msg", "Chưa có token");
+        try {
+            String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash?key=" + key;
+            restTemplate.getForEntity(url, String.class);
+            // Nếu get OK -> Token valid. Gemini free model default values:
+            return Map.of("ok", true, "model", "Gemini 2.5 Flash", "rpm", "15 RPM", "tpm", "1,000,000 TPM", "rpd", "1,500 RPD");
+        } catch (HttpStatusCodeException e) {
+            if (e.getStatusCode().value() == 429) return Map.of("ok", true, "msg", "Quá giới hạn rate limit", "exhausted", true);
+            return Map.of("ok", false, "msg", "Token không hợp lệ: HTTP " + e.getStatusCode().value());
+        } catch (Exception e) {
+            return Map.of("ok", false, "msg", "Lỗi kết nối: " + e.getMessage());
+        }
+    }
+
     /** Gọi Gemini API và trả về raw text (không parse Question) */
     private String callGeminiText(String prompt) throws Exception {
         String url = buildUrl(PRIMARY_MODEL);
@@ -290,12 +343,52 @@ public class GeminiService {
             3. ĐÁNH DẤU ĐÁP ÁN ĐÚNG: Mỗi câu hỏi phải có đủ 4 lựa chọn. Đánh dấu `isCorrect: true` cho đáp án đúng dựa vào gợi ý trong đề (ví dụ: chữ in đậm, gạch chân, hoặc đáp án có màu khác). Nếu không có gợi ý, mặc định chọn đáp án đầu tiên (A) là đúng.
             4. NẾU trong nội dung gốc có các đoạn mã [IMG_0], [IMG_1]... thì BẮT BUỘC PHẢI GIỮ LẠI nguyên vẹn các đoạn mã này ở đúng vị trí của chúng.
             5. NẾU trong nội dung gốc có Bảng biểu (được thể hiện bằng Markdown), BẮT BUỘC PHẢI GIỮ LẠI toàn bộ cấu trúc Markdown của bảng đó.
-            6. Trả về DUY NHẤT một JSON array. Không giải thích gì thêm.
-            7. Nếu tài liệu thực tế không có đủ %d câu hỏi, hãy trích xuất toàn bộ câu hỏi có trong đó, sau đó tự tạo thêm câu hỏi bám sát nội dung tài liệu để đủ đúng %d câu.
+            6. QUY TẮC BẮT BUỘC VỀ TOÁN HỌC: BẮT BUỘC sử dụng định dạng LaTeX (bọc trong `$ ... $` hoặc `$$ ... $$`) cho TẤT CẢ các công thức toán học, biến số, ký hiệu, phương trình trong cả nội dung câu hỏi lẫn các đáp án.
+            7. Trả về DUY NHẤT một JSON array. Không giải thích gì thêm.
+            8. Nếu tài liệu thực tế không có đủ %d câu hỏi, hãy trích xuất toàn bộ câu hỏi có trong đó, sau đó tự tạo thêm câu hỏi bám sát nội dung tài liệu để đủ đúng %d câu.
 
             Định dạng JSON:
             [{"id":"1","type":"Trắc nghiệm","text":"Nội dung câu hỏi (Không chứa đáp án)","options":[{"id":"a","text":"Nội dung A","isCorrect":true},{"id":"b","text":"Nội dung B","isCorrect":false},{"id":"c","text":"Nội dung C","isCorrect":false},{"id":"d","text":"Nội dung D","isCorrect":false}]}]
             """.formatted(text, count, count, count);
+    }
+
+    private String buildTopicPrompt(String topic, String difficulty, String language, int count) {
+        String difficultyDesc = switch (difficulty.toUpperCase()) {
+            case "EASY"   -> "Mức cơ bản (Nhận biết & Thông hiểu). Câu hỏi trực tiếp, rõ ràng, dành cho học sinh mới học.";
+            case "HARD"   -> "Mức nâng cao (Vận dụng cao). Câu hỏi đòi hỏi tư duy sâu, phân tích và tổng hợp kiến thức.";
+            case "EXPERT" -> "Mức chuyên gia (Phân hóa cao). Câu hỏi học thuật, bẫy tinh vi, phân hóa học sinh giỏi.";
+            default       -> "Mức trung bình (Thông hiểu & Vận dụng). Hỗn hợp câu dễ và khó vừa.";
+        };
+        String langInstruction = "en".equalsIgnoreCase(language)
+            ? "QUAN TRỌNG: Write ALL questions and answer choices in English."
+            : "QUAN TRỌNG: Viết TẤT CẢ câu hỏi và đáp án bằng Tiếng Việt.";
+
+        return """
+            # VAI TRÒ
+            Bạn là Giáo sư chuyên gia biên soạn đề thi hàng đầu Việt Nam. Bạn có kiến thức uyên thâm về mọi môn học,
+            chương trình giáo dục phổ thông và đại học. Nhiệm vụ: tự biên soạn bộ câu hỏi trắc nghiệm chất lượng cao
+            hoàn toàn dựa trên kho tri thức nội tại của mình, KHÔNG dựa vào bất kỳ tài liệu nào được cung cấp.
+
+            # YÊU CẦU ĐỀ TÀI
+            %s
+
+            # THÔNG SỐ ĐỀ THI
+            - Số lượng câu hỏi: ĐÚNG %d câu. Không thiếu, không thừa.
+            - Độ khó: %s
+            - %s
+
+            # TIÊU CHUẨN CHẤT LƯỢNG (BẮT BUỘC TUÂN THỦ)
+            1. TÍNH CHÍNH XÁC KHOA HỌC: Mọi câu hỏi và đáp án phải đúng 100%% về mặt học thuật.
+            2. PHÂN HÓA NĂNG LỰC: Các lựa chọn sai (distractors) phải hợp lý, gần đúng, dễ nhầm lẫn, không phải ngẫu nhiên.
+            3. TÍNH ĐỘC LẬP: Các câu hỏi không được lặp ý, không được phụ thuộc vào nhau.
+            4. MỖI CÂU phải có đúng 4 lựa chọn (A, B, C, D), chỉ đúng 1 đáp án.
+            5. TRÁNH LỖI PHỔ BIẾN: Không có dạng câu "Tất cả đều đúng" hoặc "Không có đáp án nào đúng".
+            6. ĐỘ ĐA DẠNG: Bao quát nhiều khía cạnh khác nhau của chủ đề, không hỏi lặp đi lặp lại một nội dung.
+            7. QUY TẮC TOÁN HỌC (TỐI QUAN TRỌNG): Đối với các môn tự nhiên, BẮT BUỘC sử dụng định dạng LaTeX (bọc trong `$ ... $` hoặc `$$ ... $$`) cho TẤT CẢ các công thức, biến số, hàm số, phương trình, ký hiệu toán học (Ví dụ: dùng `$f(x) = x^2.sin(x)$` thay vì ghi chữ thuần). Áp dụng cho cả đề bài và 4 phương án.
+
+            # ĐỊNH DẠNG OUTPUT (DUY NHẤT JSON ARRAY — KHÔNG GIẢI THÍCH THÊM)
+            [{"id":"1","type":"Trắc nghiệm","text":"Nội dung câu hỏi","options":[{"id":"a","text":"Đáp án A","isCorrect":true},{"id":"b","text":"Đáp án B","isCorrect":false},{"id":"c","text":"Đáp án C","isCorrect":false},{"id":"d","text":"Đáp án D","isCorrect":false}]}]
+            """.formatted(topic, count, difficultyDesc, langInstruction);
     }
 
     private String buildRefinePrompt(String command, String text) {
@@ -365,7 +458,7 @@ public class GeminiService {
     private String buildUrl(String modelName) {
         // Luôn dùng v1beta để hỗ trợ response_mime_type
         String apiVersion = "v1beta";
-        return GEMINI_HOST + apiVersion + "/models/" + modelName + ":generateContent?key=" + apiKey;
+        return GEMINI_HOST + apiVersion + "/models/" + modelName + ":generateContent?key=" + getActiveApiKey();
     }
 
     // ─────────────────────────────────────────────────────────────────

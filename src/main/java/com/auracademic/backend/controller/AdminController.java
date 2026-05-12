@@ -265,6 +265,22 @@ public class AdminController {
         settingService.updateSettings(settings);
         return ResponseEntity.ok(Map.of("message", "Đã lưu cấu hình hệ thống"));
     }
+
+    @Autowired
+    private com.auracademic.backend.service.GeminiService geminiService;
+    @Autowired
+    private com.auracademic.backend.service.GroqService groqService;
+
+    @GetMapping("/ai-tokens/check")
+    public ResponseEntity<?> checkAiTokens(@RequestParam String type) {
+        if ("gemini".equalsIgnoreCase(type)) {
+            return ResponseEntity.ok(geminiService.checkHealth());
+        } else if ("groq".equalsIgnoreCase(type)) {
+            return ResponseEntity.ok(groqService.checkHealth());
+        }
+        return ResponseEntity.badRequest().body(Map.of("ok", false, "msg", "Invalid provider type"));
+    }
+
     @Autowired
     private com.auracademic.backend.repository.RefreshTokenRepository refreshTokenRepository;
 

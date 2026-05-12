@@ -2,69 +2,50 @@ package com.auracademic.backend.service;
 
 import com.auracademic.backend.model.SystemSetting;
 import com.auracademic.backend.repository.SystemSettingRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 public class SettingService {
-    private final SystemSettingRepository repository;
 
-    public SettingService(SystemSettingRepository repository) {
-        this.repository = repository;
+    @Autowired
+    private SystemSettingRepository repository;
+
+    public String getSetting(String key, String defaultValue) {
+        return repository.findById(key)
+                .map(SystemSetting::getValue)
+                .filter(val -> val != null && !val.trim().isEmpty())
+                .orElse(defaultValue);
     }
 
     public boolean getBoolean(String key, boolean defaultValue) {
-        return repository.findByKey(key)
-                .map(s -> Boolean.parseBoolean(s.getValue().toString()))
-                .orElse(defaultValue);
+        String val = getSetting(key, null);
+        if (val == null) return defaultValue;
+        return Boolean.parseBoolean(val);
     }
 
-    public int getInt(String key, int defaultValue) {
-        return repository.findByKey(key)
-                .map(s -> {
-                    try {
-                        return Integer.parseInt(s.getValue().toString());
-                    } catch (NumberFormatException e) {
-                        return defaultValue;
-                    }
-                })
-                .orElse(defaultValue);
+    public Map<String, String> getAllSettings() {
+        return repository.findAll().stream()
+                .collect(Collectors.toMap(SystemSetting::getId, SystemSetting::getValue, (v1, v2) -> v1));
     }
 
-    public String getString(String key, String defaultValue) {
-        return repository.findByKey(key)
-                .map(s -> s.getValue().toString())
-                .orElse(defaultValue);
+    public void saveSetting(String key, String value, String description) {
+        SystemSetting setting = repository.findById(key)
+                .orElse(new SystemSetting(key, value, description));
+        
+        setting.setValue(value);
+        setting.setLastUpdated(System.currentTimeMillis());
+        repository.save(setting);
     }
 
     public void updateSettings(Map<String, Object> settings) {
         for (Map.Entry<String, Object> entry : settings.entrySet()) {
-            String key = entry.getKey();
-            Object value = entry.getValue();
-            String type = value instanceof Boolean ? "boolean" : (value instanceof Number ? "number" : "string");
-            
-            SystemSetting s = repository.findByKey(key).orElse(new SystemSetting(key, value, type));
-            s.setValue(value);
-            s.setType(type);
-            repository.save(s);
-        }
-    }
-
-    public Map<String, Object> getAllSettings() {
-        List<SystemSetting> list = repository.findAll();
-        Map<String, Object> map = new HashMap<>();
-        for (SystemSetting s : list) {
-            Object val = s.getValue();
-            if ("boolean".equals(s.getType()) && val instanceof String) {
-                val = Boolean.parseBoolean((String) val);
-            } else if ("number".equals(s.getType()) && val instanceof String) {
-                try { val = Integer.parseInt((String) val); } catch (Exception ignored) {}
+            if (entry.getValue() != null) {
+                saveSetting(entry.getKey(), String.valueOf(entry.getValue()), "System Updated");
             }
-            map.put(s.getKey(), val);
         }
-        return map;
     }
 }
