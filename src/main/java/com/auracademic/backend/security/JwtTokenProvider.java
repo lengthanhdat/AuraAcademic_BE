@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
 import java.util.Date;
+import java.util.Optional;
 
 @Component
 public class JwtTokenProvider {
@@ -31,15 +32,23 @@ public class JwtTokenProvider {
     }
 
     public String generateAccessToken(User user) {
-        return Jwts.builder()
+        return generateAccessToken(user, null);
+    }
+
+    public String generateAccessToken(User user, String sessionId) {
+        JwtBuilder builder = Jwts.builder()
                 .subject(user.getId())
                 .claim("email", user.getEmail())
                 .claim("role", user.getRole())
                 .claim("type", "access")
                 .issuedAt(new Date())
-                .expiration(new Date(System.currentTimeMillis() + accessTokenExpiry))
-                .signWith(getSigningKey())
-                .compact();
+                .expiration(new Date(System.currentTimeMillis() + accessTokenExpiry));
+
+        if (sessionId != null && !sessionId.isBlank()) {
+            builder.claim("sessionId", sessionId);
+        }
+
+        return builder.signWith(getSigningKey()).compact();
     }
 
     public String generateRefreshToken(User user) {
@@ -62,6 +71,14 @@ public class JwtTokenProvider {
 
     public String extractUserId(String token) {
         return extractClaims(token).getSubject();
+    }
+
+    public Optional<String> extractSessionId(String token) {
+        Object sessionId = extractClaims(token).get("sessionId");
+        if (sessionId == null || String.valueOf(sessionId).isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.of(String.valueOf(sessionId));
     }
 
     public boolean validateToken(String token) {

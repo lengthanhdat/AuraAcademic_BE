@@ -2,6 +2,7 @@ package com.auracademic.backend.controller;
 
 import com.auracademic.backend.dto.*;
 import com.auracademic.backend.service.AuthService;
+import com.auracademic.backend.util.ClientInfoUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -41,7 +42,7 @@ public class AuthController {
             @Valid @RequestBody LoginRequest request,
             HttpServletRequest httpRequest) {
         AuthResponse response = authService.login(request, getClientIp(httpRequest),
-                httpRequest.getHeader("User-Agent"));
+                getClientDevice(httpRequest));
         return ResponseEntity.ok(response);
     }
 
@@ -55,7 +56,7 @@ public class AuthController {
         return ResponseEntity.ok(authService.refreshToken(
                 request.getRefreshToken(),
                 getClientIp(httpRequest),
-                httpRequest.getHeader("User-Agent")));
+                getClientDevice(httpRequest)));
     }
 
     // ─── Logout ───────────────────────────────────────────────────────────────
@@ -117,17 +118,17 @@ public class AuthController {
         AuthResponse response = authService.loginWithGoogle(
                 request.getIdToken(),
                 getClientIp(httpRequest),
-                httpRequest.getHeader("User-Agent"));
+                getClientDevice(httpRequest));
         return ResponseEntity.ok(response);
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
     private String getClientIp(HttpServletRequest request) {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isEmpty()) {
-            return forwarded.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
+        return ClientInfoUtil.getClientIp(request);
+    }
+
+    private String getClientDevice(HttpServletRequest request) {
+        return ClientInfoUtil.getClientDevice(request);
     }
 }

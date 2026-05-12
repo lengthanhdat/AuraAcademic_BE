@@ -11,7 +11,8 @@ import com.auracademic.backend.security.JwtTokenProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.*;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -33,12 +34,12 @@ class AuthServiceTest {
     @Mock private TwoFactorService twoFactorService;
     @Mock private AuditLogService auditLogService;
     @Mock private UserMapper userMapper;
+    @Mock private SettingService settingService;
 
     @InjectMocks private AuthService authService;
 
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
-    /** Helper — tạo User không dùng Lombok builder */
     private User newUser(String email, String rawPassword, String role, boolean emailVerified) {
         User u = new User();
         u.setId("test-id-001");
@@ -63,9 +64,9 @@ class AuthServiceTest {
         ReflectionTestUtils.setField(authService, "emailVerificationTtl", 1440);
         ReflectionTestUtils.setField(authService, "passwordResetTtl", 60);
         ReflectionTestUtils.setField(authService, "refreshTokenExpiry", 604800000L);
+        lenient().when(settingService.getBoolean(anyString(), anyBoolean()))
+                .thenAnswer(inv -> inv.getArgument(1));
     }
-
-    // ─── Register ─────────────────────────────────────────────────────────────
 
     @Test
     void register_shouldThrowIfEmailExists() {
@@ -78,7 +79,7 @@ class AuthServiceTest {
 
         assertThatThrownBy(() -> authService.register(req, "127.0.0.1"))
                 .isInstanceOf(AuthException.class)
-                .hasMessageContaining("Email đã được đăng ký");
+                .hasMessageContaining("Email da duoc dang ky");
     }
 
     @Test
@@ -98,8 +99,6 @@ class AuthServiceTest {
         verify(userRepository).save(argThat(u -> "new@test.com".equals(u.getEmail())));
         verify(emailService).sendVerificationEmail(eq("new@test.com"), anyString(), anyString());
     }
-
-    // ─── Login ────────────────────────────────────────────────────────────────
 
     @Test
     void login_shouldThrowIfUserNotFound() {
@@ -125,7 +124,7 @@ class AuthServiceTest {
 
         assertThatThrownBy(() -> authService.login(req, "127.0.0.1", "TestAgent"))
                 .isInstanceOf(AuthException.class)
-                .hasMessageContaining("chưa được xác thực email");
+                .hasMessageContaining("chua duoc xac thuc email");
     }
 
     @Test
@@ -149,7 +148,7 @@ class AuthServiceTest {
 
         when(userRepository.findByEmail("user@test.com")).thenReturn(Optional.of(user));
         when(userRepository.save(any())).thenReturn(user);
-        when(jwtTokenProvider.generateAccessToken(any())).thenReturn("access-token");
+        when(jwtTokenProvider.generateAccessToken(any(), anyString())).thenReturn("access-token");
         when(jwtTokenProvider.generateRefreshToken(any())).thenReturn("refresh-token");
         when(jwtTokenProvider.getAccessTokenExpiry()).thenReturn(900L);
         when(refreshTokenRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -169,8 +168,6 @@ class AuthServiceTest {
         assertThat(response.getUser().getEmail()).isEqualTo("user@test.com");
     }
 
-    // ─── Forgot Password ──────────────────────────────────────────────────────
-
     @Test
     void forgotPassword_shouldSendEmailIfUserExists() {
         User user = newUser("user@test.com", null, "student", true);
@@ -189,7 +186,7 @@ class AuthServiceTest {
     @Test
     void forgotPassword_shouldNotThrowIfUserNotExists() {
         when(userRepository.findByEmail("ghost@test.com")).thenReturn(Optional.empty());
-        // Không throw — bảo vệ user enumeration (OWASP)
+
         assertThatCode(() -> authService.forgotPassword("ghost@test.com", "127.0.0.1"))
                 .doesNotThrowAnyException();
         verify(emailService, never()).sendPasswordResetEmail(any(), any(), any());

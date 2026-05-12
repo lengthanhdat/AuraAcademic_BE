@@ -7,6 +7,7 @@ import com.auracademic.backend.repository.ExamRepository;
 import com.auracademic.backend.repository.ExamResultRepository;
 import com.auracademic.backend.service.ActiveParticipantService;
 import com.auracademic.backend.service.ExamEventService;
+import com.auracademic.backend.service.SettingService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -33,6 +34,9 @@ public class ExamController {
 
     @Autowired
     private ExamEventService examEventService;
+
+    @Autowired
+    private SettingService settingService;
 
     /**
      * SSE endpoint — client kết nối để nhận sự kiện theo thời gian thực
@@ -126,6 +130,7 @@ public class ExamController {
             if (exam.getStatus() == null) {
                 exam.setStatus("DRAFT");
             }
+            applyGlobalExamSettings(exam);
             // Chỉ set startTime khi status là STARTED (giáo viên bấm nút Bắt đầu)
             // WAITING = đã tạo phòng nhưng chưa bắt đầu
             // Tự động tạo mã phòng nếu chưa có
@@ -186,7 +191,8 @@ public class ExamController {
                     info.put("accessCode", exam.getAccessCode());
                     info.put("startTime", exam.getStartTime());
                     info.put("scheduledStartTime", exam.getScheduledStartTime());
-                    info.put("aiProctoring", exam.isAiProctoring()); // Cần thiết để bật/tắt UI giám sát tại phòng chờ
+                    info.put("aiProctoring", isEffectiveAiProctoring(exam));
+                    info.put("autoDetectCheat", settingService.getBoolean(SettingService.AUTO_DETECT_CHEAT, true));
                     return ResponseEntity.ok(info);
                 })
                 .orElse(ResponseEntity.status(404).body("Mã phòng thi không tồn tại."));
@@ -230,7 +236,8 @@ public class ExamController {
                     response.put("versionCode", selectedVersion.getVersionCode());
                     response.put("questions", selectedVersion.getQuestions());
                     response.put("extractedImages", exam.getExtractedImages()); // Cần thiết để hiển thị ảnh trong câu hỏi
-                    response.put("aiProctoring", exam.isAiProctoring()); // <-- Thêm cờ này để client quyết định bật AI hay không
+                    response.put("aiProctoring", isEffectiveAiProctoring(exam));
+                    response.put("autoDetectCheat", settingService.getBoolean(SettingService.AUTO_DETECT_CHEAT, true));
                     
                     return ResponseEntity.ok(response);
                 })
@@ -250,6 +257,7 @@ public class ExamController {
                         examEventService.broadcast(exam.getAccessCode(), "status",
                             Map.of("status", "STARTED", "startTime", exam.getStartTime()));
                     }
+                    applyGlobalExamSettings(exam);
                     return ResponseEntity.ok(exam);
                 })
                 .orElse(ResponseEntity.notFound().build());
@@ -270,6 +278,7 @@ public class ExamController {
                     }
                 });
             }
+            applyGlobalExamSettings(exam);
             Exam updatedExam = examRepository.save(exam);
             return ResponseEntity.ok(updatedExam);
         } catch (Exception e) {
@@ -315,6 +324,7 @@ public class ExamController {
         try {
             List<Exam> exams = examRepository.findByTeacherId(teacherId);
             for (Exam exam : exams) {
+                applyGlobalExamSettings(exam);
                 if (exam.getAccessCode() != null) {
                     long count = resultRepository.countByExamId(exam.getAccessCode());
                     exam.setSubmissionCount(count);
@@ -327,7 +337,7 @@ public class ExamController {
     }
 
     /**
-     * Giao vien bat dau ky thi (WAITING -> STARTED), ghi startTime
+     * Giáo viên bắt đầu kỳ thi (WAITING -> STARTED), ghi startTime
      */
     @PostMapping("/{id}/start")
     public ResponseEntity<?> startExam(@PathVariable String id) {
@@ -340,7 +350,7 @@ public class ExamController {
                 examEventService.broadcast(exam.getAccessCode(), "status",
                     Map.of("status", "STARTED", "startTime", exam.getStartTime()));
                 return ResponseEntity.ok(Map.of(
-                    "message", "Ky thi da bat dau.",
+                    "message", "Kỳ thi đã bắt đầu.",
                     "startTime", exam.getStartTime()
                 ));
             }).orElse(ResponseEntity.notFound().build());
@@ -350,7 +360,7 @@ public class ExamController {
     }
 
     /**
-     * Giao vien dong phong thi thu cong truoc khi het gio
+     * Giáo viên đóng phòng thi thủ công trước khi hết giờ
      */
     @PostMapping("/{id}/close")
     public ResponseEntity<?> closeExam(@PathVariable String id) {
@@ -361,7 +371,7 @@ public class ExamController {
                 // Broadcast cho tất cả biết phòng đã đóng
                 examEventService.broadcast(exam.getAccessCode(), "status",
                     Map.of("status", "FINISHED"));
-                return ResponseEntity.ok(Map.of("message", "Phong thi da duoc dong thanh cong."));
+                return ResponseEntity.ok(Map.of("message", "Phòng thi đã được đóng thành công."));
             }).orElse(ResponseEntity.notFound().build());
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error closing exam: " + e.getMessage());
@@ -369,7 +379,7 @@ public class ExamController {
     }
 
     /**
-     * He thong tu dong ket thuc khi het gio
+     * Hệ thống tự động kết thúc khi hết giờ
      */
     @PostMapping("/{id}/finish")
     public ResponseEntity<?> finishExam(@PathVariable String id) {
@@ -380,7 +390,7 @@ public class ExamController {
                 // Broadcast cho tất cả biết bài thi đã kết thúc
                 examEventService.broadcast(exam.getAccessCode(), "status",
                     Map.of("status", "COMPLETED"));
-                return ResponseEntity.ok(Map.of("message", "Bai thi da ket thuc tu dong."));
+                return ResponseEntity.ok(Map.of("message", "Bài thi đã kết thúc tự động."));
             }).orElse(ResponseEntity.notFound().build());
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error finishing exam: " + e.getMessage());
@@ -388,7 +398,7 @@ public class ExamController {
     }
 
     /**
-     * Doi trang thai exam FINISHED thanh PUBLISHED lai (mo lai phong thi)
+     * Đổi trạng thái exam FINISHED thành PUBLISHED lại (mở lại phòng thi)
      */
     @PostMapping("/{id}/reopen")
     public ResponseEntity<?> reopenExam(@PathVariable String id) {
@@ -396,10 +406,20 @@ public class ExamController {
             return examRepository.findById(id).map(exam -> {
                 exam.setStatus("PUBLISHED");
                 examRepository.save(exam);
-                return ResponseEntity.ok(Map.of("message", "Phong thi da duoc mo lai."));
+                return ResponseEntity.ok(Map.of("message", "Phòng thi đã được mở lại."));
             }).orElse(ResponseEntity.notFound().build());
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error reopening exam: " + e.getMessage());
+        }
+    }
+
+    private boolean isEffectiveAiProctoring(Exam exam) {
+        return settingService.getBoolean(SettingService.ENABLE_AI_PROCTOR, true) && exam.isAiProctoring();
+    }
+
+    private void applyGlobalExamSettings(Exam exam) {
+        if (!settingService.getBoolean(SettingService.ENABLE_AI_PROCTOR, true)) {
+            exam.setAiProctoring(false);
         }
     }
 }

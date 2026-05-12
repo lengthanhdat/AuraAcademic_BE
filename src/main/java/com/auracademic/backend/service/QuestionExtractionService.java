@@ -32,8 +32,8 @@ import org.w3c.dom.NodeList;
 import java.io.ByteArrayInputStream;
 
 /**
- * V4: Su dung PDFTextStripper cho PDF co chu, fallback Gemini cho PDF scan anh.
- * Sua loi text=null, 4 dap an tren 1 dong, Unicode normalization.
+ * V4: Sử dụng PDFTextStripper cho PDF có chữ, fallback Gemini cho PDF scan ảnh.
+ * Sửa lỗi text=null, 4 đáp án trên 1 dòng, Unicode normalization.
  */
 @Service
 public class QuestionExtractionService {
@@ -70,7 +70,7 @@ public class QuestionExtractionService {
 
     public List<ParsedQuestion> extractFromFile(MultipartFile file) throws Exception {
         String filename = file.getOriginalFilename();
-        if (filename == null) throw new IllegalArgumentException("Ten file khong hop le");
+        if (filename == null) throw new IllegalArgumentException("Tên file không hợp lệ");
         String lower = filename.toLowerCase();
         if (lower.endsWith(".docx")) return extractFromDocx(file.getInputStream());
         if (lower.endsWith(".pdf"))  return extractFromPdf(file.getBytes(), filename);
@@ -105,8 +105,8 @@ public class QuestionExtractionService {
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // PDF — dung PDFTextStripper truoc (khong can AI),
-    //        fallback Gemini chi khi PDF la file scan (khong co chu)
+    // PDF — dùng PDFTextStripper trước (không cần AI),
+    //        fallback Gemini chỉ khi PDF là file scan (không có chữ)
     // ─────────────────────────────────────────────────────────────────
 
     private List<ParsedQuestion> extractFromPdf(byte[] bytes, String filename) throws Exception {
@@ -127,29 +127,29 @@ public class QuestionExtractionService {
                 }
                 List<ParsedQuestion> result = parseSegments(segments);
                 if (!result.isEmpty()) {
-                    log.info("[Extract] PDF text parsing: {} cau hoi", result.size());
+                    log.info("[Extract] PDF text parsing: {} câu hỏi", result.size());
                     return result;
                 }
-                log.warn("[Extract] PDF text parsed 0 cau hoi, thu Gemini fallback...");
+                log.warn("[Extract] PDF text parsed 0 câu hỏi, thử Gemini fallback...");
             } else {
-                log.warn("[Extract] PDF '{}' text rong (co the la PDF scan), thu Gemini fallback...", filename);
+                log.warn("[Extract] PDF '{}' text rỗng (có thể là PDF scan), thử Gemini fallback...", filename);
             }
 
             return extractFromPdfWithAI(bytes);
 
         } catch (Exception e) {
-            log.error("[Extract] Loi extract PDF '{}': {}", filename, e.getMessage());
+            log.error("[Extract] Lỗi extract PDF '{}': {}", filename, e.getMessage());
             throw e;
         }
     }
 
-    /** Fallback cho PDF scan (chi co anh): dung Gemini Vision de nhan dien chu */
+    /** Fallback cho PDF scan (chỉ có ảnh): dùng Gemini Vision để nhận diện chữ */
     private List<ParsedQuestion> extractFromPdfWithAI(byte[] bytes) throws Exception {
         PDDocument pdDoc = Loader.loadPDF(bytes);
         PDFRenderer renderer = new PDFRenderer(pdDoc);
         List<String> base64Images = new ArrayList<>();
 
-        log.info("[Extract] Rendering {} trang PDF thanh anh cho Gemini...", pdDoc.getNumberOfPages());
+        log.info("[Extract] Rendering {} trang PDF thành ảnh cho Gemini...", pdDoc.getNumberOfPages());
         for (int i = 0; i < pdDoc.getNumberOfPages(); i++) {
             BufferedImage image = renderer.renderImageWithDPI(i, 150, ImageType.RGB);
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -158,11 +158,11 @@ public class QuestionExtractionService {
         }
         pdDoc.close();
 
-        String prompt = "Trich xuat TOAN BO cau hoi trac nghiem tu cac hinh anh trang PDF nay. " +
-                        "Tach biet phan cau hoi va phan dap an A, B, C, D ro rang. " +
-                        "Danh dau dap an dung neu co dau hieu trong anh (to dam, gach chan, dau sao).";
+        String prompt = "Trích xuất TOÀN BỘ câu hỏi trắc nghiệm từ các hình ảnh trang PDF này. " +
+                        "Tách biệt phần câu hỏi và phần đáp án A, B, C, D rõ ràng. " +
+                        "Đánh dấu đáp án đúng nếu có dấu hiệu trong ảnh (tô đậm, gạch chân, dấu sao).";
 
-        log.info("[Extract] Goi Gemini Vision de phan tich PDF scan...");
+        log.info("[Extract] Gọi Gemini Vision để phân tích PDF scan...");
         List<Question> aiQuestions = geminiService.refineQuestions(prompt, "", base64Images);
 
         List<ParsedQuestion> result = new ArrayList<>();
@@ -170,10 +170,10 @@ public class QuestionExtractionService {
         for (Question q : aiQuestions) {
             ParsedQuestion pq = new ParsedQuestion();
             pq.setId("q" + (qCounter++));
-            // Luon dam bao text khong null
+            // Luôn đảm bảo text không null
             String qText = (q.getText() != null && !q.getText().isBlank())
                 ? q.getText()
-                : "(Cau hoi tu PDF scan - vui long nhap thu cong)";
+                : "(Câu hỏi từ PDF scan - vui lòng nhập thủ công)";
             pq.setText(qText);
             pq.setImageBase64(q.getImageUrl());
 
@@ -194,12 +194,12 @@ public class QuestionExtractionService {
             result.add(pq);
         }
 
-        log.info("[Extract] Gemini Vision trich xuat {} cau hoi tu PDF scan", result.size());
+        log.info("[Extract] Gemini Vision trích xuất {} câu hỏi từ PDF scan", result.size());
         return result;
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // CORE PARSER (dung chung cho DOCX va PDF text)
+    // CORE PARSER (dùng chung cho DOCX và PDF text)
     // ─────────────────────────────────────────────────────────────────
 
     private List<ParsedQuestion> parseSegments(List<Segment> segments) {
@@ -264,7 +264,7 @@ public class QuestionExtractionService {
         result.removeIf(q -> q.getOptions() == null
             || q.getOptions().stream().allMatch(o -> o.getText() == null || o.getText().isBlank()));
 
-        log.info("[Extract] Trich xuat {} cau hoi hop le", result.size());
+        log.info("[Extract] Trích xuất {} câu hỏi hợp lệ", result.size());
         return result;
     }
 
@@ -302,7 +302,7 @@ public class QuestionExtractionService {
         String text = textBuilder.toString().trim();
         boolean hasOptions = opts.stream().anyMatch(o -> o.getText() != null && !o.getText().isBlank());
         if (text.isEmpty() && image == null && !hasOptions) return;
-        // Luon dam bao text khong bao gio la null
+        // Luôn đảm bảo text không bao giờ là null
         if (text.isEmpty()) text = "(Xem hinh trong de)";
 
         q.setText(text);
@@ -343,7 +343,7 @@ public class QuestionExtractionService {
                     byte[] data = pics.get(0).getPictureData().getData();
                     return Base64.getEncoder().encodeToString(data);
                 } catch (Exception e) {
-                    log.warn("[Extract] Khong the doc anh tu DOCX: {}", e.getMessage());
+                    log.warn("[Extract] Không thể đọc ảnh từ DOCX: {}", e.getMessage());
                 }
             }
         }
@@ -383,7 +383,7 @@ public class QuestionExtractionService {
             Document doc = builder.parse(new ByteArrayInputStream(xml.getBytes("UTF-8")));
             return parseNode(doc.getDocumentElement()).trim();
         } catch (Exception e) {
-            log.warn("[Extract] Loi parse XML cong thuc Toan, fallback getText(): {}", e.getMessage());
+            log.warn("[Extract] Lỗi parse XML công thức Toán, fallback getText(): {}", e.getMessage());
             return para.getText();
         }
     }

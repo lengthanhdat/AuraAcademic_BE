@@ -12,14 +12,19 @@ import java.util.List;
 public class AuditLogService {
 
     private final AuditLogRepository auditLogRepository;
+    private final SettingService settingService;
 
-    public AuditLogService(AuditLogRepository auditLogRepository) {
+    public AuditLogService(AuditLogRepository auditLogRepository, SettingService settingService) {
         this.auditLogRepository = auditLogRepository;
+        this.settingService = settingService;
     }
 
 
     @Async
     public void log(String userId, String email, String event, String ipAddress, String userAgent, boolean success, String details) {
+        if (!settingService.getBoolean(SettingService.ENABLE_AUDIT_LOG, true)) {
+            return;
+        }
         AuditLog entry = new AuditLog();
         entry.setUserId(userId);
         entry.setEmail(email);

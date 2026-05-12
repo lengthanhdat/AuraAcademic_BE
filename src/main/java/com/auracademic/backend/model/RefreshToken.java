@@ -17,6 +17,8 @@ public class RefreshToken {
     @Indexed(unique = true)
     private String token;
 
+    private String sessionId;
+
     private LocalDateTime expiresAt;
 
     private LocalDateTime createdAt = LocalDateTime.now();
@@ -50,6 +52,14 @@ public class RefreshToken {
 
     public void setToken(String token) {
         this.token = token;
+    }
+
+    public String getSessionId() {
+        return sessionId;
+    }
+
+    public void setSessionId(String sessionId) {
+        this.sessionId = sessionId;
     }
 
     public LocalDateTime getExpiresAt() {

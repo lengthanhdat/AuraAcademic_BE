@@ -3,6 +3,7 @@ package com.auracademic.backend.controller;
 import com.auracademic.backend.model.ViolationLog;
 import com.auracademic.backend.repository.ViolationLogRepository;
 import com.auracademic.backend.service.ExamEventService;
+import com.auracademic.backend.service.SettingService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -21,8 +22,19 @@ public class ViolationController {
     @Autowired
     private ExamEventService examEventService;
 
+    @Autowired
+    private SettingService settingService;
+
     @PostMapping("/{code}/violation")
     public ResponseEntity<?> reportViolation(@PathVariable String code, @RequestBody Map<String, String> body) {
+        if (!settingService.getBoolean(SettingService.ENABLE_AI_PROCTOR, true)
+                || !settingService.getBoolean(SettingService.AUTO_DETECT_CHEAT, true)) {
+            return ResponseEntity.ok(Map.of(
+                    "ignored", true,
+                    "message", "AI proctoring or auto cheat detection is disabled by admin settings"
+            ));
+        }
+
         String studentId   = body.get("studentId");
         String studentName = body.get("studentName");
         String type        = body.get("type");

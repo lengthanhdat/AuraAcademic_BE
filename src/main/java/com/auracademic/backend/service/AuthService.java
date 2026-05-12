@@ -1,6 +1,4 @@
 package com.auracademic.backend.service;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import com.auracademic.backend.dto.*;
 import com.auracademic.backend.exception.AuthException;
@@ -14,7 +12,8 @@ import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
 import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
-import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -22,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -38,7 +38,15 @@ public class AuthService {
     private final UserMapper userMapper;
     private final SettingService settingService;
 
-    public AuthService(UserRepository userRepository, RefreshTokenRepository refreshTokenRepository, JwtTokenProvider jwtTokenProvider, PasswordEncoder passwordEncoder, EmailService emailService, TwoFactorService twoFactorService, AuditLogService auditLogService, UserMapper userMapper, SettingService settingService) {
+    public AuthService(UserRepository userRepository,
+                       RefreshTokenRepository refreshTokenRepository,
+                       JwtTokenProvider jwtTokenProvider,
+                       PasswordEncoder passwordEncoder,
+                       EmailService emailService,
+                       TwoFactorService twoFactorService,
+                       AuditLogService auditLogService,
+                       UserMapper userMapper,
+                       SettingService settingService) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.jwtTokenProvider = jwtTokenProvider;
@@ -49,7 +57,6 @@ public class AuthService {
         this.userMapper = userMapper;
         this.settingService = settingService;
     }
-
 
     @Value("${app.google.client-id}")
     private String googleClientId;
@@ -69,28 +76,33 @@ public class AuthService {
     @Value("${jwt.refresh-token-expiry}")
     private long refreshTokenExpiry;
 
-    // ─── Register ─────────────────────────────────────────────────────────────
-
     public void register(RegisterRequest request, String ipAddress) {
+        if (settingService.getBoolean(SettingService.MAINTENANCE_MODE, false)) {
+            throw new AuthException("Hệ thống đang bảo trì, vui lòng quay lại sau.");
+        }
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new AuthException("Email đã được đăng ký");
         }
 
-        String verificationToken = String.format("%06d", new java.util.Random().nextInt(1000000));
-
         User user = buildLocalUser(request.getFullName(), request.getEmail(),
                 passwordEncoder.encode(request.getPassword()), request.getRole());
-        user.setEmailVerificationToken(verificationToken);
-        user.setEmailVerificationExpiry(LocalDateTime.now().plusMinutes(emailVerificationTtl));
 
-        userRepository.save(user);
-        emailService.sendVerificationEmail(user.getEmail(), user.getFullName(), verificationToken);
+        if (settingService.getBoolean(SettingService.REQUIRE_EMAIL_VERIFY, true)) {
+            String verificationToken = String.format("%06d", new java.util.Random().nextInt(1000000));
+            user.setEmailVerificationToken(verificationToken);
+            user.setEmailVerificationExpiry(LocalDateTime.now().plusMinutes(emailVerificationTtl));
+            userRepository.save(user);
+            emailService.sendVerificationEmail(user.getEmail(), user.getFullName(), verificationToken);
+        } else {
+            user.setEmailVerified(true);
+            user.setEmailVerificationToken(null);
+            user.setEmailVerificationExpiry(null);
+            userRepository.save(user);
+        }
+
         auditLogService.log(user.getId(), user.getEmail(), "REGISTER", ipAddress, null, true, null);
-
         log.info("Người dùng mới đã đăng ký: {}", user.getEmail());
     }
-
-    // ─── Login ────────────────────────────────────────────────────────────────
 
     public AuthResponse login(LoginRequest request, String ipAddress, String userAgent) {
         User user = userRepository.findByEmail(request.getEmail())
@@ -99,26 +111,15 @@ public class AuthService {
                     return new AuthException("Email hoặc mật khẩu không chính xác");
                 });
 
-        // Kiểm tra account lock
         checkAccountLock(user);
+        checkAccessAllowedBySettings(user);
 
-        if (settingService.getBoolean("maintenance_mode", false) && !"admin".equals(user.getRole())) {
-            throw new AuthException("Hệ thống đang bảo trì, vui lòng quay lại sau.");
-        }
-
-        // Kiểm tra email verified
-        if (!user.isEmailVerified()) {
-            throw new AuthException("Tài khoản chưa được xác thực email. Vui lòng kiểm tra hộp thư của bạn.");
-        }
-
-        // Verify password (hỗ trợ migration từ plaintext)
         boolean passwordOk = verifyPassword(request.getPassword(), user);
         if (!passwordOk) {
             handleFailedLogin(user, ipAddress, userAgent);
             throw new AuthException("Email hoặc mật khẩu không chính xác");
         }
 
-        // Kiểm tra 2FA
         if (user.isTwoFactorEnabled()) {
             if (request.getTwoFactorCode() == null || request.getTwoFactorCode().isBlank()) {
                 throw new TwoFactorRequiredException("Vui lòng nhập mã xác thực 2FA");
@@ -129,18 +130,16 @@ public class AuthService {
             }
         }
 
-        // Reset failed attempts
+        notifySuspiciousLoginIfNeeded(user, ipAddress, userAgent);
+
         user.setFailedLoginAttempts(0);
         user.setAccountLocked(false);
         user.setLastLoginAt(LocalDateTime.now());
         userRepository.save(user);
 
         auditLogService.log(user.getId(), user.getEmail(), "LOGIN", ipAddress, userAgent, true, null);
-
         return buildAuthResponse(user, ipAddress, userAgent);
     }
-
-    // ─── Refresh Token ────────────────────────────────────────────────────────
 
     @Transactional
     public AuthResponse refreshToken(String refreshTokenStr, String ipAddress, String userAgent) {
@@ -154,14 +153,11 @@ public class AuthService {
 
         User user = userRepository.findById(refreshToken.getUserId())
                 .orElseThrow(() -> new AuthException("Không tìm thấy người dùng"));
+        checkAccessAllowedBySettings(user);
 
-        // Token rotation — xóa token cũ
         refreshTokenRepository.delete(refreshToken);
-
         return buildAuthResponse(user, ipAddress, userAgent);
     }
-
-    // ─── Logout ───────────────────────────────────────────────────────────────
 
     public void logout(String refreshTokenStr, String userId, String ipAddress) {
         refreshTokenRepository.findByToken(refreshTokenStr)
@@ -169,14 +165,25 @@ public class AuthService {
         auditLogService.log(userId, null, "LOGOUT", ipAddress, null, true, null);
     }
 
-    // ─── Email Verification ───────────────────────────────────────────────────
-
     public void verifyEmail(String email, String token) {
-        User user = userRepository.findByEmail(email).orElseThrow(() -> new AuthException("Email không tồn tại"));
-        if (!token.equals(user.getEmailVerificationToken())) throw new AuthException("Mã xác thực không hợp lệ");
-        if (user.isEmailVerified()) return; // avoid optional throwing if already verified?
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new AuthException("Email không tồn tại"));
 
-        if (user.getEmailVerificationExpiry().isBefore(LocalDateTime.now())) {
+        if (user.isEmailVerified()) {
+            return;
+        }
+        if (!settingService.getBoolean(SettingService.REQUIRE_EMAIL_VERIFY, true)) {
+            user.setEmailVerified(true);
+            user.setEmailVerificationToken(null);
+            user.setEmailVerificationExpiry(null);
+            userRepository.save(user);
+            return;
+        }
+        if (token == null || !token.equals(user.getEmailVerificationToken())) {
+            throw new AuthException("Mã xác thực không hợp lệ");
+        }
+        if (user.getEmailVerificationExpiry() == null
+                || user.getEmailVerificationExpiry().isBefore(LocalDateTime.now())) {
             throw new AuthException("Token xác thực đã hết hạn. Vui lòng yêu cầu gửi lại email.");
         }
 
@@ -188,6 +195,10 @@ public class AuthService {
     }
 
     public void resendVerification(String email) {
+        if (!settingService.getBoolean(SettingService.REQUIRE_EMAIL_VERIFY, true)) {
+            throw new AuthException("Xác thực email đang được tắt.");
+        }
+
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new AuthException("Email không tồn tại"));
 
@@ -202,10 +213,7 @@ public class AuthService {
         emailService.sendVerificationEmail(email, user.getFullName(), token);
     }
 
-    // ─── Forgot / Reset Password ──────────────────────────────────────────────
-
     public void forgotPassword(String email, String ipAddress) {
-        // Luôn trả về OK để tránh user enumeration attack (OWASP)
         userRepository.findByEmail(email).ifPresent(user -> {
             String token = String.format("%06d", new java.util.Random().nextInt(1000000));
             user.setPasswordResetToken(token);
@@ -227,15 +235,12 @@ public class AuthService {
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
         user.setPasswordResetToken(null);
         user.setPasswordResetExpiry(null);
-        // Hủy tất cả refresh tokens sau khi đổi mật khẩu
         refreshTokenRepository.deleteByUserId(user.getId());
         userRepository.save(user);
 
         auditLogService.log(user.getId(), user.getEmail(), "PASSWORD_RESET", ipAddress, null, true, null);
         log.info("Mật khẩu đã được đặt lại cho: {}", user.getEmail());
     }
-
-    // ─── Google OAuth2 ────────────────────────────────────────────────────────
 
     public AuthResponse loginWithGoogle(String idTokenStr, String ipAddress, String userAgent) {
         try {
@@ -255,20 +260,19 @@ public class AuthService {
             String name = (String) payload.get("name");
             String pictureUrl = (String) payload.get("picture");
 
-            // Tìm hoặc tạo user
             User user = userRepository.findByProviderAndProviderId("google", googleId)
                     .orElseGet(() -> userRepository.findByEmail(email)
                             .map(existingUser -> {
-                                // Link Google account nếu email đã tồn tại
                                 existingUser.setProvider("google");
                                 existingUser.setProviderId(googleId);
                                 existingUser.setEmailVerified(true);
                                 return userRepository.save(existingUser);
                             })
-                            .orElseGet(() -> {
-                                User newUser = buildOAuth2User(name, email, "google", googleId, pictureUrl);
-                                return userRepository.save(newUser);
-                            }));
+                            .orElseGet(() -> userRepository.save(
+                                    buildOAuth2User(name, email, "google", googleId, pictureUrl))));
+
+            checkAccessAllowedBySettings(user);
+            notifySuspiciousLoginIfNeeded(user, ipAddress, userAgent);
 
             user.setLastLoginAt(LocalDateTime.now());
             userRepository.save(user);
@@ -284,14 +288,22 @@ public class AuthService {
         }
     }
 
-    // ─── Helpers ──────────────────────────────────────────────────────────────
+    private void checkAccessAllowedBySettings(User user) {
+        if (settingService.getBoolean(SettingService.MAINTENANCE_MODE, false)
+                && !"admin".equalsIgnoreCase(user.getRole())) {
+            throw new AuthException("Hệ thống đang bảo trì, vui lòng quay lại sau.");
+        }
+        if (settingService.getBoolean(SettingService.REQUIRE_EMAIL_VERIFY, true)
+                && !user.isEmailVerified()) {
+            throw new AuthException("Tài khoản chưa được xác thực email. Vui lòng kiểm tra hộp thư của bạn.");
+        }
+    }
 
     private void checkAccountLock(User user) {
-        if ("admin".equalsIgnoreCase(user.getRole())) return; // Bỏ qua check khóa cho Admin
-        
+        if ("admin".equalsIgnoreCase(user.getRole())) return;
+
         if (user.isAccountLocked()) {
             if (user.getLockExpiry() != null && user.getLockExpiry().isBefore(LocalDateTime.now())) {
-                // Mở khóa tự động
                 user.setAccountLocked(false);
                 user.setFailedLoginAttempts(0);
                 user.setLockExpiry(null);
@@ -309,7 +321,6 @@ public class AuthService {
         if (stored.startsWith("$2a$") || stored.startsWith("$2b$")) {
             return passwordEncoder.matches(rawPassword, stored);
         }
-        // Migration: password cũ plaintext
         if (rawPassword.equals(stored)) {
             user.setPassword(passwordEncoder.encode(rawPassword));
             userRepository.save(user);
@@ -319,7 +330,7 @@ public class AuthService {
     }
 
     private void handleFailedLogin(User user, String ipAddress, String userAgent) {
-        boolean enforceLock = settingService.getBoolean("lock_after_5_fails", true);
+        boolean enforceLock = settingService.getBoolean(SettingService.LOCK_AFTER_5_FAILS, true);
         int attempts = user.getFailedLoginAttempts() + 1;
         user.setFailedLoginAttempts(attempts);
 
@@ -327,20 +338,52 @@ public class AuthService {
         if (enforceLock && attempts >= maxFailedAttempts && !isAdmin) {
             user.setAccountLocked(true);
             user.setLockExpiry(LocalDateTime.now().plusMinutes(lockDurationMinutes));
-            auditLogService.log(user.getId(), user.getEmail(), "ACCOUNT_LOCKED", ipAddress, userAgent, false, "Locked after " + attempts + " failed attempts");
+            auditLogService.log(user.getId(), user.getEmail(), "ACCOUNT_LOCKED", ipAddress, userAgent, false,
+                    "Locked after " + attempts + " failed attempts");
         }
-        
+
         userRepository.save(user);
         auditLogService.log(user.getId(), user.getEmail(), "FAILED_LOGIN", ipAddress, userAgent, false, "Invalid password");
     }
 
+    private void notifySuspiciousLoginIfNeeded(User user, String ipAddress, String userAgent) {
+        if (!settingService.getBoolean(SettingService.ALERT_SUSPICIOUS_LOGIN, false)) {
+            return;
+        }
+
+        var activeSessions = refreshTokenRepository.findByUserId(user.getId()).stream()
+                .filter(token -> !token.isExpired())
+                .toList();
+
+        boolean hasPreviousActiveSession = !activeSessions.isEmpty();
+        boolean knownContext = activeSessions.stream().anyMatch(token ->
+                Objects.equals(normalize(token.getIpAddress()), normalize(ipAddress))
+                        && Objects.equals(normalize(token.getDeviceInfo()), normalize(userAgent)));
+
+        if (hasPreviousActiveSession && !knownContext) {
+            emailService.sendSecurityAlertEmail(user.getEmail(), user.getFullName(), ipAddress, userAgent, LocalDateTime.now());
+            auditLogService.log(user.getId(), user.getEmail(), "SUSPICIOUS_LOGIN_ALERT", ipAddress, userAgent, true,
+                    "New login context detected");
+        }
+    }
+
+    private String normalize(String value) {
+        return value == null ? "" : value.trim();
+    }
+
     private AuthResponse buildAuthResponse(User user, String ipAddress, String userAgent) {
-        String accessToken = jwtTokenProvider.generateAccessToken(user);
+        if (settingService.getBoolean(SettingService.PREVENT_CONCURRENT_LOGIN, false)) {
+            refreshTokenRepository.deleteByUserId(user.getId());
+        }
+
+        String sessionId = UUID.randomUUID().toString();
+        String accessToken = jwtTokenProvider.generateAccessToken(user, sessionId);
         String refreshTokenStr = jwtTokenProvider.generateRefreshToken(user);
 
         RefreshToken refreshToken = new RefreshToken();
         refreshToken.setUserId(user.getId());
         refreshToken.setToken(refreshTokenStr);
+        refreshToken.setSessionId(sessionId);
         refreshToken.setDeviceInfo(userAgent);
         refreshToken.setIpAddress(ipAddress);
         refreshToken.setExpiresAt(LocalDateTime.now().plusSeconds(refreshTokenExpiry / 1000));
@@ -353,14 +396,15 @@ public class AuthService {
         authResponse.setTokenType("Bearer");
         authResponse.setExpiresIn(jwtTokenProvider.getAccessTokenExpiry());
         authResponse.setUser(userMapper.toProfile(user));
+        authResponse.setTwoFactorRequired(settingService.getBoolean(SettingService.REQUIRE_2FA, false)
+                && !user.isTwoFactorEnabled()
+                && !"admin".equalsIgnoreCase(user.getRole()));
         return authResponse;
     }
 
     public UserProfileResponse mapToProfile(User user) {
         return userMapper.toProfile(user);
     }
-
-    // ─── Internal User Builders ───────────────────────────────────────────────
 
     private User buildLocalUser(String fullName, String email, String password, String role) {
         User u = new User();

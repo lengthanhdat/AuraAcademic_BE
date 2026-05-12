@@ -5,22 +5,22 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
 /**
- * DTO dai dien mot cau hoi da duoc trich xuat tu file DOCX/PDF.
- * Khac voi Question model (luu trong exam), ParsedQuestion dung de transfer
- * ve frontend truoc khi giao vien xem truoc va chon lua.
+ * DTO đại diện một câu hỏi đã được trích xuất từ file DOCX/PDF.
+ * Khác với Question model (lưu trong exam), ParsedQuestion dùng để transfer
+ * về frontend trước khi giáo viên xem trước và chọn lựa.
  */
 public class ParsedQuestion {
     private String id;                  // "q1", "q2", ...
-    private String text;                // Noi dung cau hoi
-    private String imageBase64;         // Anh nhung trong cau hoi (data:image/png;base64,...)
-    private List<ParsedOption> options; // Cac lua chon A B C D
+    private String text;                // Nội dung câu hỏi
+    private String imageBase64;         // Ảnh nhúng trong câu hỏi (data:image/png;base64,...)
+    private List<ParsedOption> options; // Các lựa chọn A B C D
 
                 public static class ParsedOption {
         private String id;          // "a", "b", "c", "d"
         private String label;       // "A", "B", "C", "D"
-        private String text;        // Noi dung lua chon
+        private String text;        // Nội dung lựa chọn
         @JsonProperty("isCorrect")
-        private boolean isCorrect;  // True neu duoc danh dau la dap an dung
+        private boolean isCorrect;  // True nếu được đánh dấu là đáp án đúng
 
         public String getId() { return id; }
         public void setId(String id) { this.id = id; }

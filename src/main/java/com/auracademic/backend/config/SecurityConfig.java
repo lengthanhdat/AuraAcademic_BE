@@ -50,6 +50,7 @@ public class SecurityConfig {
                                 "/api/auth/**",
                                 "/actuator/health",
                                 "/api/health",
+                                "/api/health/status",
                                 "/api/exams/*/stream",    // Cho phép SSE (không gửi được header)
                                 "/api/exams/*/violation"  // AI Service gửi vi phạm, không có JWT
                         ).permitAll()

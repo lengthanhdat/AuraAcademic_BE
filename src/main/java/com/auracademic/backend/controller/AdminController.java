@@ -6,6 +6,7 @@ import com.auracademic.backend.repository.AuditLogRepository;
 import com.auracademic.backend.repository.ExamRepository;
 import com.auracademic.backend.repository.ExamResultRepository;
 import com.auracademic.backend.repository.UserRepository;
+import com.auracademic.backend.util.ClientInfoUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
@@ -197,7 +198,20 @@ public class AdminController {
         try {
             List<AuditLog> logs = auditLogRepository.findAll(Sort.by(Sort.Direction.DESC, "timestamp"));
             if (logs.size() > limit) logs = logs.subList(0, limit);
-            return ResponseEntity.ok(logs);
+            var result = logs.stream().map(log -> {
+                Map<String, Object> map = new HashMap<>();
+                map.put("id", log.getId());
+                map.put("userId", log.getUserId());
+                map.put("email", log.getEmail());
+                map.put("event", log.getEvent());
+                map.put("ipAddress", normalizeDisplayIp(log.getIpAddress()));
+                map.put("userAgent", ClientInfoUtil.getReadableDevice(log.getUserAgent()));
+                map.put("timestamp", log.getTimestamp());
+                map.put("success", log.isSuccess());
+                map.put("details", log.getDetails());
+                return map;
+            }).collect(Collectors.toList());
+            return ResponseEntity.ok(result);
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -298,8 +312,8 @@ public class AdminController {
                 map.put("token", t.getToken().substring(0, Math.min(t.getToken().length(), 10)) + "...");
                 map.put("createdAt", t.getCreatedAt());
                 map.put("expiresAt", t.getExpiresAt());
-                map.put("deviceInfo", t.getDeviceInfo());
-                map.put("ipAddress", t.getIpAddress());
+                map.put("deviceInfo", ClientInfoUtil.getReadableDevice(t.getDeviceInfo()));
+                map.put("ipAddress", normalizeDisplayIp(t.getIpAddress()));
                 map.put("expired", t.isExpired());
 
                 User u = users.get(t.getUserId());
@@ -324,5 +338,12 @@ public class AdminController {
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
+    }
+
+    private String normalizeDisplayIp(String ipAddress) {
+        if ("0:0:0:0:0:0:0:1".equals(ipAddress) || "::1".equals(ipAddress)) {
+            return "127.0.0.1";
+        }
+        return ipAddress;
     }
 }

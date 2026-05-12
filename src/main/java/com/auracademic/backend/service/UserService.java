@@ -5,7 +5,6 @@ import com.auracademic.backend.exception.AuthException;
 import com.auracademic.backend.model.User;
 import com.auracademic.backend.repository.RefreshTokenRepository;
 import com.auracademic.backend.repository.UserRepository;
-import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -19,15 +18,21 @@ public class UserService {
     private final PasswordEncoder passwordEncoder;
     private final AuditLogService auditLogService;
     private final UserMapper userMapper;
+    private final SettingService settingService;
 
-    public UserService(UserRepository userRepository, RefreshTokenRepository refreshTokenRepository, PasswordEncoder passwordEncoder, AuditLogService auditLogService, UserMapper userMapper) {
+    public UserService(UserRepository userRepository,
+                       RefreshTokenRepository refreshTokenRepository,
+                       PasswordEncoder passwordEncoder,
+                       AuditLogService auditLogService,
+                       UserMapper userMapper,
+                       SettingService settingService) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.passwordEncoder = passwordEncoder;
         this.auditLogService = auditLogService;
         this.userMapper = userMapper;
+        this.settingService = settingService;
     }
-
 
     public UserProfileResponse getProfile(String userId) {
         User user = userRepository.findById(userId)
@@ -62,7 +67,7 @@ public class UserService {
     public UserProfileResponse updateAvatar(String userId, String base64Avatar) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new AuthException("Không tìm thấy người dùng"));
-        
+
         user.setAvatarUrl(base64Avatar);
         user.setUpdatedAt(LocalDateTime.now());
         userRepository.save(user);
@@ -79,7 +84,6 @@ public class UserService {
 
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
         user.setUpdatedAt(LocalDateTime.now());
-        // Hủy tất cả refresh tokens sau khi đổi mật khẩu
         refreshTokenRepository.deleteByUserId(userId);
         userRepository.save(user);
 
@@ -91,8 +95,9 @@ public class UserService {
                 .orElseThrow(() -> new AuthException("Không tìm thấy người dùng"));
 
         String secret = twoFactorService.generateSecret();
-        // Lưu secret tạm thời (chưa enable 2FA cho đến khi verify)
         user.setTwoFactorSecret(secret);
+        userRepository.save(user);
+
         TwoFactorSetupResponse tfa = new TwoFactorSetupResponse();
         tfa.setSecret(secret);
         tfa.setQrCodeUri(twoFactorService.generateQrCodeUri(user.getEmail(), secret));
@@ -107,14 +112,12 @@ public class UserService {
         if (user.getTwoFactorSecret() == null) {
             throw new AuthException("Chưa khởi tạo 2FA. Vui lòng thực hiện /2fa/setup trước.");
         }
-
         if (!twoFactorService.verifyCode(user.getTwoFactorSecret(), code)) {
             throw new AuthException("Mã xác thực không đúng");
         }
 
         user.setTwoFactorEnabled(true);
         userRepository.save(user);
-
         auditLogService.log(userId, user.getEmail(), "2FA_ENABLE", ipAddress, null, true, null);
     }
 
@@ -125,7 +128,10 @@ public class UserService {
         if (!user.isTwoFactorEnabled()) {
             throw new AuthException("2FA chưa được bật");
         }
-
+        if (settingService.getBoolean(SettingService.REQUIRE_2FA, false)
+                && !"admin".equalsIgnoreCase(user.getRole())) {
+            throw new AuthException("Hệ thống đang bắt buộc 2FA, không thể tắt chức năng này.");
+        }
         if (!twoFactorService.verifyCode(user.getTwoFactorSecret(), code)) {
             throw new AuthException("Mã xác thực không đúng");
         }
@@ -133,8 +139,6 @@ public class UserService {
         user.setTwoFactorEnabled(false);
         user.setTwoFactorSecret(null);
         userRepository.save(user);
-
         auditLogService.log(userId, user.getEmail(), "2FA_DISABLE", ipAddress, null, true, null);
     }
-
 }
