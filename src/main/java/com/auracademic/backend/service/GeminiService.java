@@ -301,6 +301,51 @@ public class GeminiService {
         }
     }
 
+    /**
+     * Hỗ trợ Chat Assistant sinh câu trả lời Markdown tự do dựa trên prompt.
+     */
+    @Retryable(
+        retryFor  = { Exception.class },
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 1000, multiplier = 2.0)
+    )
+    public String generateChatResponse(String prompt) throws Exception {
+        log.info("[Gemini] Đang sinh phản hồi chat hỗ trợ...");
+        String url = buildUrl(PRIMARY_MODEL);
+        
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))));
+        requestBody.put("generationConfig", Map.of(
+            "temperature", 0.7 // Tăng sáng tạo cho chat
+        ));
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        
+        String responseStr = restTemplate.postForObject(url, new HttpEntity<>(requestBody, headers), String.class);
+        
+        Map<String, Object> responseMap = mapper.readValue(responseStr, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+        List<Map<String, Object>> candidates = (List<Map<String, Object>>) responseMap.get("candidates");
+        if (candidates == null || candidates.isEmpty()) throw new RuntimeException("Gemini candidates rỗng");
+        Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
+        List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
+        
+        String rawText = null;
+        for (Map<String, Object> part : parts) {
+            Boolean isThought = (Boolean) part.get("thought");
+            if (Boolean.TRUE.equals(isThought)) continue;
+            rawText = (String) part.get("text");
+            if (rawText != null && !rawText.isBlank()) break;
+        }
+        return rawText != null ? rawText.trim() : "Trợ lý AI tạm thời không có phản hồi.";
+    }
+    
+    @Recover
+    public String recoverGenerateChatResponse(Exception ex, String prompt) {
+        log.error("[Gemini] Chat Assistant thất bại sau 3 lần thử: {}", ex.getMessage());
+        throw new RuntimeException("Trợ lý AI không phản hồi sau 3 lần thử.", ex);
+    }
+
     /** Gọi Gemini API và trả về raw text (không parse Question) */
     private String callGeminiText(String prompt) throws Exception {
         String url = buildUrl(PRIMARY_MODEL);

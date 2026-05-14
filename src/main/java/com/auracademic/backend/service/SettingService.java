@@ -21,6 +21,7 @@ public class SettingService {
     public static final String ENABLE_AI_PROCTOR = "enable_ai_proctor";
     public static final String AUTO_DETECT_CHEAT = "auto_detect_cheat";
     public static final String MAINTENANCE_MODE = "maintenance_mode";
+    public static final String CHAT_AI_ENABLED = "chat_ai_enabled";
 
     private static final Map<String, String> DEFAULT_SETTINGS = new LinkedHashMap<>();
     private static final Set<String> BOOLEAN_SETTINGS = Set.of(
@@ -32,7 +33,8 @@ public class SettingService {
             ALERT_SUSPICIOUS_LOGIN,
             ENABLE_AI_PROCTOR,
             AUTO_DETECT_CHEAT,
-            MAINTENANCE_MODE
+            MAINTENANCE_MODE,
+            CHAT_AI_ENABLED
     );
 
     static {
@@ -50,6 +52,7 @@ public class SettingService {
         DEFAULT_SETTINGS.put(ENABLE_AI_PROCTOR, "true");
         DEFAULT_SETTINGS.put(AUTO_DETECT_CHEAT, "true");
         DEFAULT_SETTINGS.put(MAINTENANCE_MODE, "false");
+        DEFAULT_SETTINGS.put(CHAT_AI_ENABLED, "true");
     }
 
     @Autowired

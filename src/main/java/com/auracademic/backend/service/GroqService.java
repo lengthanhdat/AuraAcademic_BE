@@ -116,6 +116,37 @@ public class GroqService {
         }
     }
 
+    public String generateChatResponse(String prompt) throws Exception {
+        log.info("[Groq] Đang sinh phản hồi chat hỗ trợ dự phòng...");
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(getActiveApiKey());
+
+        Map<String, Object> message = Map.of(
+            "role", "user",
+            "content", prompt
+        );
+
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("model", modelName);
+        requestBody.put("messages", List.of(message));
+        requestBody.put("temperature", 0.7);
+        requestBody.put("max_tokens", 2048);
+
+        String responseStr = restTemplate.postForObject(
+            apiUrl, new HttpEntity<>(requestBody, headers), String.class
+        );
+        
+        Map<String, Object> responseMap = mapper.readValue(responseStr, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+        List<Map<String, Object>> choices = (List<Map<String, Object>>) responseMap.get("choices");
+        if (choices == null || choices.isEmpty()) {
+            return "Trợ lý AI (dự phòng) tạm thời không có phản hồi.";
+        }
+        Map<String, Object> choiceMessage = (Map<String, Object>) choices.get(0).get("message");
+        String text = (String) choiceMessage.get("content");
+        return text != null ? text.trim() : "";
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // GROQ HTTP CALL (OpenAI Chat Completions format)
     // ─────────────────────────────────────────────────────────────────

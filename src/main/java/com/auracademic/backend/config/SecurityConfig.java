@@ -52,7 +52,8 @@ public class SecurityConfig {
                                 "/api/health",
                                 "/api/health/status",
                                 "/api/exams/*/stream",    // Cho phép SSE (không gửi được header)
-                                "/api/exams/*/violation"  // AI Service gửi vi phạm, không có JWT
+                                "/api/exams/*/violation", // AI Service gửi vi phạm, không có JWT
+                                "/ws/**"                  // Cho phép SockJS Handshake🌌
                         ).permitAll()
                         // Admin only
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
