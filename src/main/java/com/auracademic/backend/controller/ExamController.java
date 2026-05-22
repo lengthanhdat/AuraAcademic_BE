@@ -137,6 +137,9 @@ public class ExamController {
             if (exam.getAccessCode() == null || exam.getAccessCode().isEmpty()) {
                 exam.setAccessCode(java.util.UUID.randomUUID().toString().substring(0, 6).toUpperCase());
             }
+            if (exam.getCreatedAt() == null) {
+                exam.setCreatedAt(java.time.LocalDateTime.now());
+            }
             Exam savedExam = examRepository.save(exam);
             return ResponseEntity.ok(savedExam);
         } catch (Exception e) {
@@ -322,7 +325,9 @@ public class ExamController {
     @GetMapping("/teacher/{teacherId}")
     public ResponseEntity<?> getTeacherExams(@PathVariable String teacherId) {
         try {
-            List<Exam> exams = examRepository.findByTeacherId(teacherId);
+            List<Exam> exams = examRepository.findByTeacherId(teacherId).stream()
+                    .filter(exam -> !exam.isPractice() && !exam.isBankItem())
+                    .toList();
             for (Exam exam : exams) {
                 applyGlobalExamSettings(exam);
                 if (exam.getAccessCode() != null) {
@@ -343,6 +348,9 @@ public class ExamController {
     public ResponseEntity<?> startExam(@PathVariable String id) {
         try {
             return examRepository.findById(id).map(exam -> {
+                if (exam.isPractice() || exam.isBankItem()) {
+                    return ResponseEntity.badRequest().body(Map.of("message", "Không thể thực hiện trên bài ôn tập Ngân hàng đề."));
+                }
                 exam.setStatus("STARTED");
                 exam.setStartTime(System.currentTimeMillis());
                 examRepository.save(exam);
@@ -366,6 +374,9 @@ public class ExamController {
     public ResponseEntity<?> closeExam(@PathVariable String id) {
         try {
             return examRepository.findById(id).map(exam -> {
+                if (exam.isPractice() || exam.isBankItem()) {
+                    return ResponseEntity.badRequest().body(Map.of("message", "Không thể thực hiện trên bài ôn tập Ngân hàng đề."));
+                }
                 exam.setStatus("FINISHED");
                 examRepository.save(exam);
                 // Broadcast cho tất cả biết phòng đã đóng
@@ -410,6 +421,24 @@ public class ExamController {
             }).orElse(ResponseEntity.notFound().build());
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error reopening exam: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Chuyển đề thi vào Ngân hàng đề thi
+     */
+    @PostMapping("/{id}/publish-to-bank")
+    public ResponseEntity<?> publishToBank(@PathVariable String id) {
+        try {
+            return examRepository.findById(id).map(exam -> {
+                exam.setPractice(true);
+                exam.setBankItem(true);
+                exam.setStatus("PUBLISHED"); // Ensure it's published
+                examRepository.save(exam);
+                return ResponseEntity.ok(Map.of("message", "Đã đưa đề thi vào Ngân hàng thành công."));
+            }).orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error publishing to bank: " + e.getMessage());
         }
     }
 

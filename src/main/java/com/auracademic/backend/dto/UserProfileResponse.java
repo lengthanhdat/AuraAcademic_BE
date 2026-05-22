@@ -25,6 +25,15 @@ public class UserProfileResponse {
     private boolean twoFactorEnabled;
     private LocalDateTime createdAt;
     private LocalDateTime lastLoginAt;
+    private java.util.List<String> favoritePracticeIds;
+
+    public java.util.List<String> getFavoritePracticeIds() {
+        return favoritePracticeIds;
+    }
+
+    public void setFavoritePracticeIds(java.util.List<String> favoritePracticeIds) {
+        this.favoritePracticeIds = favoritePracticeIds;
+    }
 
     public String getId() {
         return id;

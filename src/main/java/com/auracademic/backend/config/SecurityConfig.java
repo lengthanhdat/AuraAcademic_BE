@@ -51,6 +51,7 @@ public class SecurityConfig {
                                 "/actuator/health",
                                 "/api/health",
                                 "/api/health/status",
+                                "/api/exam-bank/public/**", // Public exam bank browsing
                                 "/api/exams/*/stream",    // Cho phép SSE (không gửi được header)
                                 "/api/exams/*/violation", // AI Service gửi vi phạm, không có JWT
                                 "/ws/**"                  // Cho phép SockJS Handshake🌌

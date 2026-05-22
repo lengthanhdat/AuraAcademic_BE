@@ -45,6 +45,16 @@ public class User {
     private String experience;
     private LocalDateTime updatedAt;
 
+    private java.util.List<String> favoritePracticeIds = new java.util.ArrayList<>();
+
+    public java.util.List<String> getFavoritePracticeIds() {
+        return favoritePracticeIds;
+    }
+
+    public void setFavoritePracticeIds(java.util.List<String> favoritePracticeIds) {
+        this.favoritePracticeIds = favoritePracticeIds;
+    }
+
 public String getId() {
         return id;
     }

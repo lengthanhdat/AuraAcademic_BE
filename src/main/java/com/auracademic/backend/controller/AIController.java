@@ -5,6 +5,7 @@ import com.auracademic.backend.model.Question;
 import com.auracademic.backend.repository.AiJobRepository;
 import com.auracademic.backend.service.AiProcessingService;
 import com.auracademic.backend.service.GeminiService;
+import com.auracademic.backend.service.GroqService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,6 +16,8 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Controller xử lý các API liên quan đến AI sinh câu hỏi.
@@ -38,6 +41,9 @@ public class AIController {
 
     @Autowired
     private GeminiService geminiService;
+
+    @Autowired
+    private GroqService groqService;
 
     // ─────────────────────────────────────────────────────────────────
     // POST /api/ai/generate-questions
@@ -148,6 +154,115 @@ public class AIController {
             .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+
+    @PostMapping("/choose-correct-answer")
+    public ResponseEntity<?> chooseCorrectAnswer(@RequestBody Map<String, Object> payload) {
+        try {
+            String question = String.valueOf(payload.getOrDefault("question", "")).trim();
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> options = (List<Map<String, Object>>) payload.getOrDefault("options", List.of());
+
+            if (question.isBlank() || options.isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Missing question or options."));
+            }
+
+            String prompt = buildChooseCorrectPrompt(question, options);
+            String rawAnswer;
+            String provider = "gemini";
+            try {
+                rawAnswer = geminiService.generateChatResponse(prompt);
+            } catch (Exception geminiError) {
+                log.warn("[API] Gemini choose-correct-answer failed, falling back to Groq: {}", geminiError.getMessage());
+                provider = "groq";
+                rawAnswer = groqService.generateChatResponse(prompt);
+            }
+
+            String label = parseAnswerLabel(rawAnswer);
+            if (label == null) {
+                return ResponseEntity.unprocessableEntity().body(Map.of(
+                    "error", "AI did not return a valid answer label.",
+                    "rawAnswer", rawAnswer != null ? rawAnswer : "",
+                    "provider", provider
+                ));
+            }
+
+            String optionId = findOptionIdByLabel(options, label);
+            if (optionId == null) {
+                return ResponseEntity.unprocessableEntity().body(Map.of(
+                    "error", "AI returned a label that does not exist in options.",
+                    "correctLabel", label,
+                    "rawAnswer", rawAnswer != null ? rawAnswer : "",
+                    "provider", provider
+                ));
+            }
+
+            return ResponseEntity.ok(Map.of(
+                "correctLabel", label,
+                "correctOptionId", optionId,
+                "rawAnswer", rawAnswer != null ? rawAnswer : "",
+                "provider", provider
+            ));
+        } catch (Exception e) {
+            log.error("[API] choose-correct-answer failed: ", e);
+            return ResponseEntity.internalServerError().body(Map.of("error", "AI answer selection failed: " + e.getMessage()));
+        }
+    }
+
+    private String buildChooseCorrectPrompt(String question, List<Map<String, Object>> options) {
+        StringBuilder optionLines = new StringBuilder();
+        for (Map<String, Object> option : options) {
+            String label = String.valueOf(option.getOrDefault("label", "")).trim().toUpperCase();
+            String text = String.valueOf(option.getOrDefault("text", "")).trim();
+            if (!label.isBlank() && !text.isBlank()) {
+                optionLines.append(label).append(". ").append(text).append("\n");
+            }
+        }
+
+        return "You are an expert teacher. Choose exactly one correct answer for this multiple-choice question.\n"
+            + "Return only valid JSON, no markdown, no explanation. Required schema: {\"correctLabel\":\"A\"}.\n"
+            + "The correctLabel must be one of the option labels shown below.\n\n"
+            + "Question: " + question + "\n"
+            + optionLines;
+    }
+
+    private String parseAnswerLabel(String rawAnswer) {
+        if (rawAnswer == null || rawAnswer.isBlank()) {
+            return null;
+        }
+
+        String cleaned = rawAnswer.trim()
+            .replaceFirst("(?is)^```json\\s*", "")
+            .replaceFirst("(?is)^```\\s*", "")
+            .replaceFirst("(?is)```$", "")
+            .trim();
+
+        Matcher jsonLike = Pattern.compile("(?i)\\\"?(?:correctLabel|correctOption|answer|label)\\\"?\\s*[:=]\\s*\\\"?([A-D])\\\"?").matcher(cleaned);
+        if (jsonLike.find()) {
+            return jsonLike.group(1).toUpperCase();
+        }
+
+        Matcher vi = Pattern.compile("(?i)(?:dap\\s*an|answer|label)\\s*[:=]\\s*([A-D])\\b").matcher(cleaned);
+        if (vi.find()) {
+            return vi.group(1).toUpperCase();
+        }
+
+        Matcher standalone = Pattern.compile("(?i)^\\s*([A-D])\\s*\\.?,?\\s*$").matcher(cleaned);
+        if (standalone.find()) {
+            return standalone.group(1).toUpperCase();
+        }
+
+        return null;
+    }
+
+    private String findOptionIdByLabel(List<Map<String, Object>> options, String label) {
+        for (Map<String, Object> option : options) {
+            String optionLabel = String.valueOf(option.getOrDefault("label", "")).trim().toUpperCase();
+            if (label.equals(optionLabel)) {
+                return String.valueOf(option.getOrDefault("id", label.toLowerCase())).trim();
+            }
+        }
+        return null;
+    }
     // ─────────────────────────────────────────────────────────────────
     // POST /api/ai/chat-refine
     // Tinh chỉnh / thêm câu hỏi qua AI assistant (đồng bộ, giữ nguyên)
@@ -171,4 +286,44 @@ public class AIController {
                 .body(Map.of("error", "Lỗi trợ lý AI: " + e.getMessage()));
         }
     }
+    @PostMapping("/explain")
+    public ResponseEntity<?> explainAnswer(@RequestBody Map<String, String> payload) {
+        try {
+            String question = String.valueOf(payload.getOrDefault("question", "")).trim();
+            String selected = String.valueOf(payload.getOrDefault("selected", "")).trim();
+            String correct = String.valueOf(payload.getOrDefault("correct", "")).trim();
+
+            if (question.isBlank() || correct.isBlank()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Missing question or correct answer."));
+            }
+
+            String prompt = "Bạn là trợ lý học tập cho học sinh. "
+                + "Giải thích ngắn gọn, dễ hiểu bằng tiếng Việt vì sao đáp án đúng là đáp án đã cho. "
+                + "Không lan man, không nhắc tới việc bạn là AI.\n\n"
+                + "Câu hỏi: " + question + "\n"
+                + "Học sinh chọn: " + (selected.isBlank() ? "Chưa chọn" : selected) + "\n"
+                + "Đáp án đúng: " + correct + "\n\n"
+                + "Hãy giải thích trong tối đa 120 từ.";
+
+            String explanation;
+            String provider = "gemini";
+            try {
+                explanation = geminiService.generateChatResponse(prompt);
+            } catch (Exception geminiError) {
+                log.warn("[API] Gemini explain failed, falling back to Groq: {}", geminiError.getMessage());
+                provider = "groq";
+                explanation = groqService.generateChatResponse(prompt);
+            }
+
+            if (explanation == null || explanation.isBlank()) {
+                return ResponseEntity.unprocessableEntity().body(Map.of("error", "AI did not return an explanation.", "provider", provider));
+            }
+
+            return ResponseEntity.ok(Map.of("explanation", explanation.trim(), "provider", provider));
+        } catch (Exception e) {
+            log.error("[API] explain failed: ", e);
+            return ResponseEntity.internalServerError().body(Map.of("error", "AI explanation failed: " + e.getMessage()));
+        }
+    }
+
 }

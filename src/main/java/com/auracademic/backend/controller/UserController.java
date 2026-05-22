@@ -24,11 +24,13 @@ public class UserController {
     private final UserService userService;
     private final TwoFactorService twoFactorService;
     private final AuditLogService auditLogService;
+    private final com.auracademic.backend.repository.UserRepository userRepository;
 
-    public UserController(UserService userService, TwoFactorService twoFactorService, AuditLogService auditLogService) {
+    public UserController(UserService userService, TwoFactorService twoFactorService, AuditLogService auditLogService, com.auracademic.backend.repository.UserRepository userRepository) {
         this.userService = userService;
         this.twoFactorService = twoFactorService;
         this.auditLogService = auditLogService;
+        this.userRepository = userRepository;
     }
 
 
@@ -110,6 +112,30 @@ public class UserController {
     public ResponseEntity<List<AuditLog>> getAuditLog(
             @AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(auditLogService.getUserLogs(principal.getId()));
+    }
+
+    // ─── Favorites ────────────────────────────────────────────────────────────
+
+    @PostMapping("/me/favorite-practice/{examId}")
+    public ResponseEntity<?> toggleFavoritePractice(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable String examId) {
+        return userRepository.findById(principal.getId()).map(user -> {
+            List<String> favs = user.getFavoritePracticeIds();
+            if (favs == null) {
+                favs = new java.util.ArrayList<>();
+            }
+            boolean isFavorite = false;
+            if (favs.contains(examId)) {
+                favs.remove(examId);
+            } else {
+                favs.add(examId);
+                isFavorite = true;
+            }
+            user.setFavoritePracticeIds(favs);
+            userRepository.save(user);
+            return ResponseEntity.ok(Map.of("message", "Đã cập nhật yêu thích", "isFavorite", isFavorite));
+        }).orElse(ResponseEntity.notFound().build());
     }
 
     // ─── Admin: Get any user profile ─────────────────────────────────────────

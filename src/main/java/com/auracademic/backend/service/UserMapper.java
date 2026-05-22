@@ -31,6 +31,7 @@ public class UserMapper {
         res.setTwoFactorEnabled(user.isTwoFactorEnabled());
         res.setCreatedAt(user.getCreatedAt());
         res.setLastLoginAt(user.getLastLoginAt());
+        res.setFavoritePracticeIds(user.getFavoritePracticeIds() != null ? user.getFavoritePracticeIds() : new java.util.ArrayList<>());
         return res;
     }
 }

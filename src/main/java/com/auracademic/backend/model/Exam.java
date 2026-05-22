@@ -3,7 +3,9 @@ package com.auracademic.backend.model;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.Transient;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.mapping.Field;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Document(collection = "exams")
@@ -23,6 +25,14 @@ public class Exam {
     private String difficulty; // "EASY", "MEDIUM", "HARD", "EXPERT"
     private List<ExamVersion> versions;
     private List<String> extractedImages; // Base64 images extracted from source document
+    @Field("isPractice")
+    private boolean isPractice; // Cờ đánh dấu đề thi nằm trong Ngân hàng Luyện tập (Practice Exam)
+    private String folderId; // ID của thư mục trong Ngân hàng đề (ExamBankFolder)
+    private String grade;    // Lớp học (VD: "Lớp 9") - có thể kế thừa từ folder
+    private String subject;  // Môn học (VD: "Toán học") - có thể kế thừa từ folder
+    @Field("isBankItem")
+    private boolean isBankItem; // Cờ đánh dấu đề thi này được tạo RIÊNG cho Ngân hàng (không phải luồng thi chính thức)
+    private LocalDateTime createdAt = LocalDateTime.now();
     
     @Transient
     private long submissionCount; // Number of students who have submitted results
@@ -145,5 +155,53 @@ public class Exam {
 
     public void setSubmissionCount(long submissionCount) {
         this.submissionCount = submissionCount;
+    }
+
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public boolean isPractice() {
+        return isPractice;
+    }
+
+    public void setPractice(boolean practice) {
+        isPractice = practice;
+    }
+
+    public String getFolderId() {
+        return folderId;
+    }
+
+    public void setFolderId(String folderId) {
+        this.folderId = folderId;
+    }
+
+    public boolean isBankItem() {
+        return isBankItem;
+    }
+
+    public void setBankItem(boolean bankItem) {
+        isBankItem = bankItem;
+    }
+
+    public String getGrade() {
+        return grade;
+    }
+
+    public void setGrade(String grade) {
+        this.grade = grade;
+    }
+
+    public String getSubject() {
+        return subject;
+    }
+
+    public void setSubject(String subject) {
+        this.subject = subject;
     }
 }
