@@ -18,4 +18,6 @@ public interface MaterialRepository extends MongoRepository<Material, String> {
     List<Material> searchPublished(String keyword);
 
     List<Material> findByStatusAndSubjectIgnoreCaseOrderByCreatedAtDesc(String status, String subject);
+
+    List<Material> findByClassroomIdOrderByCreatedAtDesc(String classroomId);
 }

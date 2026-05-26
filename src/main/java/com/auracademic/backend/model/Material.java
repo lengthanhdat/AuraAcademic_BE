@@ -21,6 +21,7 @@ public class Material {
     private String fileName;
     private long fileSizeBytes;
     private List<String> tags;
+    private String classroomId; // Lớp học được chia sẻ (tùy chọn)
 
     private String uploadedBy;    // userId
     private String uploaderName;
@@ -89,4 +90,7 @@ public class Material {
 
     public long getDownloadCount() { return downloadCount; }
     public void setDownloadCount(long downloadCount) { this.downloadCount = downloadCount; }
+
+    public String getClassroomId() { return classroomId; }
+    public void setClassroomId(String classroomId) { this.classroomId = classroomId; }
 }

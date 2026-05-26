@@ -96,4 +96,18 @@ public class ChatController {
             aiChatService.processAiResponseAsync(msg.getContent(), msg.getSenderName(), currentRoomId);
         }
     }
+
+    @Autowired
+    private com.auracademic.backend.repository.ClassroomMessageRepository classroomMessageRepository;
+
+    /**
+     * Xử lý WebSocket group chat của Lớp học
+     */
+    @MessageMapping("/classroom.send")
+    public void handleClassroomMessage(com.auracademic.backend.model.ClassroomMessage msg) {
+        if (msg.getClassroomId() == null) return;
+        msg.setTimestamp(LocalDateTime.now());
+        com.auracademic.backend.model.ClassroomMessage saved = classroomMessageRepository.save(msg);
+        messagingTemplate.convertAndSend("/topic/classroom/" + msg.getClassroomId(), saved);
+    }
 }

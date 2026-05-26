@@ -32,6 +32,7 @@ public class Exam {
     private String subject;  // Môn học (VD: "Toán học") - có thể kế thừa từ folder
     @Field("isBankItem")
     private boolean isBankItem; // Cờ đánh dấu đề thi này được tạo RIÊNG cho Ngân hàng (không phải luồng thi chính thức)
+    private String classroomId; // Liên kết bài thi với lớp học cụ thể (nếu có)
     private LocalDateTime createdAt = LocalDateTime.now();
     
     @Transient
@@ -203,5 +204,13 @@ public class Exam {
 
     public void setSubject(String subject) {
         this.subject = subject;
+    }
+    
+    public String getClassroomId() {
+        return classroomId;
+    }
+    
+    public void setClassroomId(String classroomId) {
+        this.classroomId = classroomId;
     }
 }
