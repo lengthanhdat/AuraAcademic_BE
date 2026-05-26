@@ -7,10 +7,15 @@ import com.auracademic.backend.repository.ExamRepository;
 import com.auracademic.backend.repository.ExamResultRepository;
 import com.auracademic.backend.service.ActiveParticipantService;
 import com.auracademic.backend.service.ExamEventService;
+import com.auracademic.backend.model.Classroom;
+import com.auracademic.backend.model.User;
+import com.auracademic.backend.repository.ClassroomRepository;
+import com.auracademic.backend.repository.UserRepository;
 import com.auracademic.backend.service.SettingService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -37,6 +42,12 @@ public class ExamController {
 
     @Autowired
     private SettingService settingService;
+
+    @Autowired
+    private ClassroomRepository classroomRepository;
+
+    @Autowired
+    private UserRepository userRepository;
 
     /**
      * SSE endpoint — client kết nối để nhận sự kiện theo thời gian thực
@@ -66,7 +77,7 @@ public class ExamController {
     @PostMapping("/{code}/heartbeat")
     public ResponseEntity<?> heartbeat(@PathVariable String code, @RequestBody Map<String, String> body) {
         // Auto-start trigger
-        examRepository.findByAccessCode(code.toUpperCase()).ifPresent(exam -> {
+        examRepository.findFirstByAccessCode(code.toUpperCase()).ifPresent(exam -> {
             if ("PUBLISHED".equals(exam.getStatus()) && exam.getScheduledStartTime() != null && System.currentTimeMillis() >= exam.getScheduledStartTime()) {
                 exam.setStatus("STARTED");
                 exam.setStartTime(exam.getScheduledStartTime());
@@ -90,7 +101,7 @@ public class ExamController {
             ));
         }
         // Retrieve current exam status to return as fallback
-        String currentStatus = examRepository.findByAccessCode(code.toUpperCase())
+        String currentStatus = examRepository.findFirstByAccessCode(code.toUpperCase())
             .map(Exam::getStatus)
             .orElse("UNKNOWN");
 
@@ -155,7 +166,7 @@ public class ExamController {
             for (ExamResult r : results) {
                 if (r.getExamTitle() == null || r.getExamTitle().isEmpty()) {
                     // Tìm theo accessCode (examId trong Result đang lưu accessCode)
-                    examRepository.findByAccessCode(r.getExamId())
+                    examRepository.findFirstByAccessCode(r.getExamId())
                         .ifPresent(ex -> r.setExamTitle(ex.getTitle()));
                 }
             }
@@ -170,7 +181,7 @@ public class ExamController {
      */
     @GetMapping("/lobby/{code}")
     public ResponseEntity<?> getLobbyInfo(@PathVariable String code) {
-        return examRepository.findByAccessCode(code.toUpperCase())
+        return examRepository.findFirstByAccessCode(code.toUpperCase())
                 .map(exam -> {
                     // Auto-start logic
                     if ("PUBLISHED".equals(exam.getStatus()) && exam.getScheduledStartTime() != null && System.currentTimeMillis() >= exam.getScheduledStartTime()) {
@@ -179,6 +190,36 @@ public class ExamController {
                         examRepository.save(exam);
                         examEventService.broadcast(exam.getAccessCode(), "status",
                             Map.of("status", "STARTED", "startTime", exam.getStartTime()));
+                    }
+
+                    // Classroom access validation
+                    try {
+                        if (exam.getClassroomId() != null && !exam.getClassroomId().isEmpty() && !"null".equalsIgnoreCase(exam.getClassroomId()) && !"undefined".equalsIgnoreCase(exam.getClassroomId())) {
+                            Classroom classroom = classroomRepository.findById(exam.getClassroomId()).orElse(null);
+                            if (classroom != null) {
+                                Authentication auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+                                if (auth == null || !auth.isAuthenticated() || "anonymousUser".equalsIgnoreCase(auth.getName())) {
+                                    return ResponseEntity.status(401).body("Yêu cầu xác thực tài khoản.");
+                                }
+                                String email = auth.getName();
+                                if (email == null || email.isEmpty()) {
+                                    return ResponseEntity.status(401).body("Yêu cầu xác thực tài khoản.");
+                                }
+                                User user = userRepository.findByEmail(email).orElse(null);
+                                if (user == null) {
+                                    return ResponseEntity.status(401).body("Yêu cầu xác thực tài khoản.");
+                                }
+                                
+                                // Teachers and Admins bypass membership check
+                                boolean isStudent = "student".equalsIgnoreCase(user.getRole());
+                                if (isStudent && (classroom.getStudentIds() == null || !classroom.getStudentIds().contains(user.getId()))) {
+                                    return ResponseEntity.status(403).body("Bài kiểm tra này chỉ dành riêng cho học sinh chính thức thuộc lớp: " + classroom.getName());
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Error validating classroom membership in lobby: " + e.getMessage());
+                        e.printStackTrace();
                     }
 
                     if ("DRAFT".equals(exam.getStatus())) {
@@ -196,6 +237,25 @@ public class ExamController {
                     info.put("scheduledStartTime", exam.getScheduledStartTime());
                     info.put("aiProctoring", isEffectiveAiProctoring(exam));
                     info.put("autoDetectCheat", settingService.getBoolean(SettingService.AUTO_DETECT_CHEAT, true));
+                    
+                    // Determine preview mode for teachers/admins
+                    boolean isPreviewMode = false;
+                    try {
+                        Authentication auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+                        if (auth != null && auth.isAuthenticated() && !"anonymousUser".equalsIgnoreCase(auth.getName())) {
+                            String email = auth.getName();
+                            if (email != null && !email.isEmpty()) {
+                                User user = userRepository.findByEmail(email).orElse(null);
+                                if (user != null && !"student".equalsIgnoreCase(user.getRole())) {
+                                    isPreviewMode = true;
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Error determining preview mode in lobby: " + e.getMessage());
+                    }
+                    info.put("isPreviewMode", isPreviewMode);
+
                     return ResponseEntity.ok(info);
                 })
                 .orElse(ResponseEntity.status(404).body("Mã phòng thi không tồn tại."));
@@ -203,7 +263,7 @@ public class ExamController {
 
     @GetMapping("/join/{code}")
     public ResponseEntity<?> joinExam(@PathVariable String code) {
-        return examRepository.findByAccessCode(code.toUpperCase())
+        return examRepository.findFirstByAccessCode(code.toUpperCase())
                 .map(exam -> {
                     // Auto-start logic
                     if ("PUBLISHED".equals(exam.getStatus()) && exam.getScheduledStartTime() != null && System.currentTimeMillis() >= exam.getScheduledStartTime()) {
@@ -212,6 +272,36 @@ public class ExamController {
                         examRepository.save(exam);
                         examEventService.broadcast(exam.getAccessCode(), "status",
                             Map.of("status", "STARTED", "startTime", exam.getStartTime()));
+                    }
+
+                    // Classroom access validation
+                    try {
+                        if (exam.getClassroomId() != null && !exam.getClassroomId().isEmpty() && !"null".equalsIgnoreCase(exam.getClassroomId()) && !"undefined".equalsIgnoreCase(exam.getClassroomId())) {
+                            Classroom classroom = classroomRepository.findById(exam.getClassroomId()).orElse(null);
+                            if (classroom != null) {
+                                Authentication auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+                                if (auth == null || !auth.isAuthenticated() || "anonymousUser".equalsIgnoreCase(auth.getName())) {
+                                    return ResponseEntity.status(401).body("Yêu cầu xác thực tài khoản.");
+                                }
+                                String email = auth.getName();
+                                if (email == null || email.isEmpty()) {
+                                    return ResponseEntity.status(401).body("Yêu cầu xác thực tài khoản.");
+                                }
+                                User user = userRepository.findByEmail(email).orElse(null);
+                                if (user == null) {
+                                    return ResponseEntity.status(401).body("Yêu cầu xác thực tài khoản.");
+                                }
+                                
+                                // Teachers and Admins bypass membership check
+                                boolean isStudent = "student".equalsIgnoreCase(user.getRole());
+                                if (isStudent && (classroom.getStudentIds() == null || !classroom.getStudentIds().contains(user.getId()))) {
+                                    return ResponseEntity.status(403).body("Bài kiểm tra này chỉ dành riêng cho học sinh chính thức thuộc lớp: " + classroom.getName());
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Error validating classroom membership in join: " + e.getMessage());
+                        e.printStackTrace();
                     }
 
                     // Chỉ cho phép vào thi khi GV đã nhấn "Bắt đầu thi" (STARTED)
@@ -338,6 +428,21 @@ public class ExamController {
             return ResponseEntity.ok(exams);
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error fetching exams: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/teacher/{teacherId}/bank-items")
+    public ResponseEntity<?> getTeacherBankItems(@PathVariable String teacherId) {
+        try {
+            List<Exam> exams = examRepository.findByTeacherId(teacherId).stream()
+                    .filter(exam -> exam.isBankItem() || exam.isPractice())
+                    .toList();
+            for (Exam exam : exams) {
+                applyGlobalExamSettings(exam);
+            }
+            return ResponseEntity.ok(exams);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error fetching bank exams: " + e.getMessage());
         }
     }
 

@@ -1,5 +1,6 @@
 package com.auracademic.backend.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.Transient;
 import org.springframework.data.mongodb.core.mapping.Document;
@@ -26,11 +27,13 @@ public class Exam {
     private List<ExamVersion> versions;
     private List<String> extractedImages; // Base64 images extracted from source document
     @Field("isPractice")
+    @JsonProperty("isPractice")
     private boolean isPractice; // Cờ đánh dấu đề thi nằm trong Ngân hàng Luyện tập (Practice Exam)
     private String folderId; // ID của thư mục trong Ngân hàng đề (ExamBankFolder)
     private String grade;    // Lớp học (VD: "Lớp 9") - có thể kế thừa từ folder
     private String subject;  // Môn học (VD: "Toán học") - có thể kế thừa từ folder
     @Field("isBankItem")
+    @JsonProperty("isBankItem")
     private boolean isBankItem; // Cờ đánh dấu đề thi này được tạo RIÊNG cho Ngân hàng (không phải luồng thi chính thức)
     private String classroomId; // Liên kết bài thi với lớp học cụ thể (nếu có)
     private LocalDateTime createdAt = LocalDateTime.now();

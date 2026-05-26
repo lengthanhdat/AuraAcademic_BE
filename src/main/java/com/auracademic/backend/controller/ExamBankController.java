@@ -28,6 +28,27 @@ public class ExamBankController {
     @Autowired
     private com.auracademic.backend.repository.PracticeResultRepository practiceResultRepository;
 
+    @jakarta.annotation.PostConstruct
+    public void migrateExams() {
+        try {
+            List<Exam> exams = examRepository.findAll();
+            int updatedCount = 0;
+            for (Exam exam : exams) {
+                if (exam.getFolderId() != null && (!exam.isPractice() || !exam.isBankItem())) {
+                    exam.setPractice(true);
+                    exam.setBankItem(true);
+                    examRepository.save(exam);
+                    updatedCount++;
+                }
+            }
+            if (updatedCount > 0) {
+                System.out.println(">>> AuraAcademic Data Migration: Repaired " + updatedCount + " bank exams (set isPractice=true and isBankItem=true).");
+            }
+        } catch (Exception e) {
+            System.err.println(">>> AuraAcademic Data Migration Error: " + e.getMessage());
+        }
+    }
+
     @GetMapping("/teacher/{teacherId}/folders")
     public ResponseEntity<List<ExamBankFolder>> getFolders(@PathVariable String teacherId) {
         // Now returns ALL global folders since Admin creates them.

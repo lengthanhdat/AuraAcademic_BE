@@ -1,6 +1,7 @@
 package com.auracademic.backend.controller;
 
 import com.auracademic.backend.model.Classroom;
+import com.auracademic.backend.model.Exam;
 import com.auracademic.backend.model.User;
 import com.auracademic.backend.repository.ClassroomRepository;
 import com.auracademic.backend.repository.ExamRepository;
@@ -102,6 +103,36 @@ public class ClassroomController {
         response.put("classroom", classroom);
         response.put("exams", examRepository.findByClassroomId(id));
         response.put("materials", materialRepository.findByClassroomIdOrderByCreatedAtDesc(id));
+
+        // Lấy thông tin chi tiết học sinh chính thức
+        List<Map<String, String>> studentDetails = new ArrayList<>();
+        if (classroom.getStudentIds() != null) {
+            for (String sid : classroom.getStudentIds()) {
+                userRepository.findById(sid).ifPresent(u -> {
+                    Map<String, String> sInfo = new HashMap<>();
+                    sInfo.put("id", u.getId());
+                    sInfo.put("fullName", u.getFullName() != null ? u.getFullName() : u.getEmail());
+                    sInfo.put("email", u.getEmail());
+                    studentDetails.add(sInfo);
+                });
+            }
+        }
+        response.put("students", studentDetails);
+
+        // Lấy thông tin chi tiết học sinh chờ duyệt
+        List<Map<String, String>> pendingDetails = new ArrayList<>();
+        if (classroom.getPendingStudentIds() != null) {
+            for (String sid : classroom.getPendingStudentIds()) {
+                userRepository.findById(sid).ifPresent(u -> {
+                    Map<String, String> sInfo = new HashMap<>();
+                    sInfo.put("id", u.getId());
+                    sInfo.put("fullName", u.getFullName() != null ? u.getFullName() : u.getEmail());
+                    sInfo.put("email", u.getEmail());
+                    pendingDetails.add(sInfo);
+                });
+            }
+        }
+        response.put("pendingStudents", pendingDetails);
 
         return ResponseEntity.ok(response);
     }
@@ -221,5 +252,109 @@ public class ClassroomController {
         }
 
         return ResponseEntity.ok(classroomMessageRepository.findByClassroomIdOrderByTimestampAsc(id));
+    }
+
+    // 10. Lấy danh sách bài thi của một Lớp học
+    @GetMapping("/{id}/exams")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<?> getClassroomExams(@PathVariable String id, Authentication auth) {
+        Optional<Classroom> opt = classroomRepository.findById(id);
+        if (opt.isEmpty()) return ResponseEntity.notFound().build();
+        Classroom classroom = opt.get();
+
+        User user = userRepository.findByEmail(auth.getName()).orElse(null);
+        if (user == null) return ResponseEntity.status(401).body("Unauthorized");
+
+        boolean isTeacher = user.getId().equals(classroom.getTeacherId());
+        boolean isStudent = classroom.getStudentIds().contains(user.getId());
+        boolean isAdmin = user.getRole().equalsIgnoreCase("ADMIN");
+        if (!isTeacher && !isStudent && !isAdmin) {
+            return ResponseEntity.status(403).body("Không có quyền truy cập.");
+        }
+
+        List<Exam> exams = examRepository.findByClassroomId(id);
+        return ResponseEntity.ok(exams);
+    }
+
+    // 11. Giao bài thi từ ngân hàng đề thi vào Lớp học (nhân bản đề thi)
+    @PostMapping("/{id}/exams/link")
+    @PreAuthorize("hasRole('TEACHER') or hasRole('ADMIN')")
+    public ResponseEntity<?> linkExamFromBank(@PathVariable String id, @RequestBody Map<String, String> payload, Authentication auth) {
+        String examId = payload.get("examId");
+        if (examId == null || examId.isEmpty()) {
+            return ResponseEntity.badRequest().body("Thiếu ID đề thi cần giao.");
+        }
+
+        Optional<Classroom> optClassroom = classroomRepository.findById(id);
+        if (optClassroom.isEmpty()) return ResponseEntity.notFound().build();
+        Classroom classroom = optClassroom.get();
+
+        User teacher = userRepository.findByEmail(auth.getName()).orElse(null);
+        if (teacher == null) return ResponseEntity.status(401).body("Unauthorized");
+
+        if (!classroom.getTeacherId().equals(teacher.getId()) && !teacher.getRole().equalsIgnoreCase("ADMIN")) {
+            return ResponseEntity.status(403).body("Không có quyền thực hiện hành động này.");
+        }
+
+        Optional<Exam> optExam = examRepository.findById(examId);
+        if (optExam.isEmpty()) return ResponseEntity.status(404).body("Không tìm thấy đề thi gốc.");
+        Exam sourceExam = optExam.get();
+
+        // Tiến hành nhân bản đề thi (Clone)
+        Exam clonedExam = new Exam();
+        clonedExam.setTitle(sourceExam.getTitle());
+        clonedExam.setDuration(sourceExam.getDuration());
+        clonedExam.setShuffle(sourceExam.isShuffle());
+        clonedExam.setAiProctoring(sourceExam.isAiProctoring());
+        clonedExam.setTeacherId(teacher.getId());
+        clonedExam.setTeacherName(teacher.getFullName() != null ? teacher.getFullName() : teacher.getEmail());
+        clonedExam.setStatus("PUBLISHED"); // Đặt trạng thái ban đầu là PUBLISHED để học sinh có thể vào phòng chờ
+        clonedExam.setDifficulty(sourceExam.getDifficulty());
+        clonedExam.setVersions(sourceExam.getVersions());
+        clonedExam.setExtractedImages(sourceExam.getExtractedImages());
+        clonedExam.setPractice(false);
+        clonedExam.setBankItem(false);
+        clonedExam.setClassroomId(id);
+        clonedExam.setFolderId(sourceExam.getFolderId());
+        clonedExam.setGrade(sourceExam.getGrade());
+        clonedExam.setSubject(sourceExam.getSubject());
+        
+        // Tạo mã phòng thi (accessCode) mới
+        String accessCode;
+        do {
+            accessCode = UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+        } while (examRepository.findFirstByAccessCode(accessCode).isPresent());
+        clonedExam.setAccessCode(accessCode);
+        clonedExam.setCreatedAt(LocalDateTime.now());
+
+        Exam savedExam = examRepository.save(clonedExam);
+        return ResponseEntity.ok(savedExam);
+    }
+
+    // 12. Xóa bài kiểm tra khỏi Lớp học
+    @DeleteMapping("/{id}/exams/{examId}")
+    @PreAuthorize("hasRole('TEACHER') or hasRole('ADMIN')")
+    public ResponseEntity<?> unlinkExam(@PathVariable String id, @PathVariable String examId, Authentication auth) {
+        Optional<Classroom> optClassroom = classroomRepository.findById(id);
+        if (optClassroom.isEmpty()) return ResponseEntity.notFound().build();
+        Classroom classroom = optClassroom.get();
+
+        User teacher = userRepository.findByEmail(auth.getName()).orElse(null);
+        if (teacher == null) return ResponseEntity.status(401).body("Unauthorized");
+
+        if (!classroom.getTeacherId().equals(teacher.getId()) && !teacher.getRole().equalsIgnoreCase("ADMIN")) {
+            return ResponseEntity.status(403).body("Không có quyền thực hiện hành động này.");
+        }
+
+        Optional<Exam> optExam = examRepository.findById(examId);
+        if (optExam.isEmpty()) return ResponseEntity.status(404).body("Không tìm thấy đề thi.");
+        Exam exam = optExam.get();
+
+        if (!id.equals(exam.getClassroomId())) {
+            return ResponseEntity.badRequest().body("Đề thi này không thuộc lớp học hiện tại.");
+        }
+
+        examRepository.delete(exam);
+        return ResponseEntity.ok(Map.of("message", "Đã xóa bài thi thành công!"));
     }
 }
