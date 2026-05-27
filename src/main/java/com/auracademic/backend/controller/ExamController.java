@@ -547,6 +547,23 @@ public class ExamController {
         }
     }
 
+    /**
+     * Gỡ đề thi khỏi Ngân hàng đề thi
+     */
+    @PostMapping("/{id}/remove-from-bank")
+    public ResponseEntity<?> removeFromBank(@PathVariable String id) {
+        try {
+            return examRepository.findById(id).map(exam -> {
+                exam.setPractice(false);
+                exam.setBankItem(false);
+                examRepository.save(exam);
+                return ResponseEntity.ok(Map.of("message", "Đã gỡ đề thi khỏi Ngân hàng thành công."));
+            }).orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error removing from bank: " + e.getMessage());
+        }
+    }
+
     private boolean isEffectiveAiProctoring(Exam exam) {
         return settingService.getBoolean(SettingService.ENABLE_AI_PROCTOR, true) && exam.isAiProctoring();
     }

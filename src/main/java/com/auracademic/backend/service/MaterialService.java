@@ -4,6 +4,7 @@ import com.auracademic.backend.exception.AuthException;
 import com.auracademic.backend.model.Material;
 import com.auracademic.backend.repository.MaterialRepository;
 import com.auracademic.backend.repository.UserRepository;
+import com.auracademic.backend.service.LiteLlmService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
@@ -22,7 +23,7 @@ public class MaterialService {
     private final MaterialRepository materialRepository;
     private final UserRepository userRepository;
     private final AuditLogService auditLogService;
-    private final GeminiService geminiService;
+    private final LiteLlmService liteLlmService;
     private final FileTextExtractorService fileTextExtractorService;
     private final ProfanityFilterService profanityFilterService;
 
@@ -42,13 +43,13 @@ public class MaterialService {
     public MaterialService(MaterialRepository materialRepository,
             UserRepository userRepository,
             AuditLogService auditLogService,
-            GeminiService geminiService,
+            LiteLlmService liteLlmService,
             FileTextExtractorService fileTextExtractorService,
             ProfanityFilterService profanityFilterService) {
         this.materialRepository = materialRepository;
         this.userRepository = userRepository;
         this.auditLogService = auditLogService;
-        this.geminiService = geminiService;
+        this.liteLlmService = liteLlmService;
         this.fileTextExtractorService = fileTextExtractorService;
         this.profanityFilterService = profanityFilterService;
     }
@@ -126,7 +127,7 @@ public class MaterialService {
 
             log.info("[AI-Gate] Kiểm duyệt tài liệu trước khi lưu: '{}'", title);
             try {
-                Map<String, Object> aiResult = geminiService.reviewMaterial(
+                Map<String, Object> aiResult = liteLlmService.reviewMaterial(
                         title, description, subject, fileType, category, fileName, extractedContent);
 
                 boolean approved = Boolean.TRUE.equals(aiResult.get("approved"));

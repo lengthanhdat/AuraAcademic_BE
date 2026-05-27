@@ -4,8 +4,7 @@ import com.auracademic.backend.model.AiJob;
 import com.auracademic.backend.model.Question;
 import com.auracademic.backend.repository.AiJobRepository;
 import com.auracademic.backend.service.AiProcessingService;
-import com.auracademic.backend.service.GeminiService;
-import com.auracademic.backend.service.GroqService;
+import com.auracademic.backend.service.LiteLlmService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,10 +39,7 @@ public class AIController {
     private AiProcessingService aiProcessingService;
 
     @Autowired
-    private GeminiService geminiService;
-
-    @Autowired
-    private GroqService groqService;
+    private LiteLlmService liteLlmService;
 
     // ─────────────────────────────────────────────────────────────────
     // POST /api/ai/generate-questions
@@ -168,14 +164,8 @@ public class AIController {
 
             String prompt = buildChooseCorrectPrompt(question, options);
             String rawAnswer;
-            String provider = "gemini";
-            try {
-                rawAnswer = geminiService.generateChatResponse(prompt);
-            } catch (Exception geminiError) {
-                log.warn("[API] Gemini choose-correct-answer failed, falling back to Groq: {}", geminiError.getMessage());
-                provider = "groq";
-                rawAnswer = groqService.generateChatResponse(prompt);
-            }
+            String provider = "litellm";
+            rawAnswer = liteLlmService.chooseCorrectAnswer(question, options);
 
             String label = parseAnswerLabel(rawAnswer);
             if (label == null) {
@@ -277,7 +267,7 @@ public class AIController {
 
             log.info("[API] Chat-refine — lệnh: \"{}\" (kèm {} ảnh)", command, images.size());
 
-            List<Question> updated = geminiService.refineQuestions(command, documentText, images);
+            List<Question> updated = liteLlmService.refineQuestions(command, documentText, images);
             return ResponseEntity.ok(Map.of("questions", updated));
 
         } catch (Exception e) {
@@ -306,14 +296,8 @@ public class AIController {
                 + "Hãy giải thích trong tối đa 120 từ.";
 
             String explanation;
-            String provider = "gemini";
-            try {
-                explanation = geminiService.generateChatResponse(prompt);
-            } catch (Exception geminiError) {
-                log.warn("[API] Gemini explain failed, falling back to Groq: {}", geminiError.getMessage());
-                provider = "groq";
-                explanation = groqService.generateChatResponse(prompt);
-            }
+            String provider = "litellm";
+            explanation = liteLlmService.generateChatResponse(prompt);
 
             if (explanation == null || explanation.isBlank()) {
                 return ResponseEntity.unprocessableEntity().body(Map.of("error", "AI did not return an explanation.", "provider", provider));

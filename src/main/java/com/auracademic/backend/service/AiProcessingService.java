@@ -8,23 +8,21 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Orchestrator bất đồng bộ cho pipeline xử lý AI:
- *   1. Trích xuất văn bản từ tài liệu (DocumentExtractorService)
- *   2. Gọi Gemini AI để sinh câu hỏi (GeminiService — có @Retryable)
- *   3. Cập nhật trạng thái job trong MongoDB
+ * Orchestrator bất đồng bộ cho pipeline xử lý AI (Fire-and-Poll pattern).
  *
- * Tách @Async ở đây thay vì trong GeminiService để đảm bảo
- * @Retryable của GeminiService vẫn hoạt động qua Spring AOP proxy.
+ * Pipeline:
+ *   1. Nhận request → tạo AiJob(PROCESSING) → trả về jobId ngay (<50ms)
+ *   2. Xử lý ngầm: DocumentExtractorService → LiteLlmService → lưu kết quả
+ *   3. Frontend polling GET /api/ai/jobs/{jobId} cho đến khi DONE / FAILED
  *
- * QUAN TRỌNG: Spring chỉ inject @Async qua proxy — KHÔNG gọi method này
- * từ bên trong class (self-invocation sẽ bypass proxy).
+ * Fallback & Load Balancing được xử lý hoàn toàn bởi LiteLLM Proxy:
+ *   - Không còn isQuotaError() hay try-catch Gemini → Groq thủ công ở đây.
+ *   - LiteLLM tự động xoay vòng qua nhiều API Keys và chuyển model khi cần.
  */
 @Service
 public class AiProcessingService {
@@ -38,18 +36,16 @@ public class AiProcessingService {
     private DocumentExtractorService documentExtractorService;
 
     @Autowired
-    private GeminiService geminiService;
-
-    @Autowired
-    private GroqService groqService;
+    private LiteLlmService liteLlmService;
 
     /**
-     * Xử lý toàn bộ pipeline AI trong một thread riêng biệt.
+     * Xử lý toàn bộ pipeline AI trong thread riêng biệt (Async).
+     * Tài liệu upload → trích xuất → LiteLLM sinh câu hỏi → lưu MongoDB.
      *
-     * @param jobId  ID của AiJob đã được tạo trước với status=PROCESSING
-     * @param file   File tài liệu giáo viên upload (DOCX, PDF, TXT)
-     * @param count  Số câu hỏi cần tạo
-     * @return CompletableFuture<Void> — caller không cần chờ kết quả
+     * @param jobId     ID của AiJob đã tạo với status=PROCESSING
+     * @param fileBytes Dữ liệu file (đã đọc đồng bộ trước khi gọi @Async)
+     * @param filename  Tên file gốc
+     * @param count     Số câu hỏi cần tạo
      */
     @Async
     public CompletableFuture<Void> processJob(String jobId, byte[] fileBytes, String filename, int count) {
@@ -57,9 +53,9 @@ public class AiProcessingService {
         log.info("[AiJob:{}] Bắt đầu xử lý — file: {}, số câu: {}", jobId, filename, count);
 
         try {
-            // ── Bước 1: Trích xuất văn bản từ tài liệu ────────────────
-            log.info("[AiJob:{}] Đang trích xuất văn bản...", jobId);
-            Map<String, Object> content = documentExtractorService.extractContent(fileBytes, filename);
+            // ── Bước 1: Trích xuất văn bản và hình ảnh từ tài liệu ──────────────
+            log.info("[AiJob:{}] Đang trích xuất nội dung từ file...", jobId);
+            var content = documentExtractorService.extractContent(fileBytes, filename);
             String extractedText = (String) content.get("text");
             @SuppressWarnings("unchecked")
             List<String> extractedImages = (List<String>) content.getOrDefault("images", List.of());
@@ -68,48 +64,32 @@ public class AiProcessingService {
                 failJob(jobId, "Nội dung tài liệu quá ngắn hoặc không đọc được.");
                 return CompletableFuture.completedFuture(null);
             }
-
             log.info("[AiJob:{}] Trích xuất xong — {} ký tự văn bản, {} hình ảnh", jobId, extractedText.length(), extractedImages.size());
 
-            // ── Bước 2: Thử goi Gemini AI (Primary) ──────────────────
-            List<Question> questions = null;
-            String usedProvider = "Gemini (gemini-2.5-flash)";
-            try {
-                log.info("[AiJob:{}] Đang gọi Gemini AI...", jobId);
-                if (!extractedImages.isEmpty()) {
-                    questions = geminiService.generateQuestionsWithImages(extractedText, extractedImages, count);
-                } else {
-                    questions = geminiService.generateQuestions(extractedText, count);
-                }
-            } catch (Exception geminiEx) {
-                log.warn("[AiJob:{}] Gemini thất bại: {}", jobId, geminiEx.getMessage());
-
-                // Nếu lỗi do hết quota hoặc định dạng (theo logic fallback đã cấu hình)
-                if (isQuotaError(geminiEx)) {
-                    log.warn("[AiJob:{}] Gemini có lỗi/hết quota — Đang chuyển sang Groq dự phòng...", jobId);
-                    usedProvider = "Groq (llama3-70b)";
-                    questions = groqService.generateQuestions(extractedText, count);
-                    log.info("[AiJob:{}] Groq sinh thành công {} câu hỏi", jobId, questions.size());
-                } else {
-                    throw geminiEx;
-                }
+            // ── Bước 2: Gọi LiteLLM Proxy sinh câu hỏi ─────────────────────────
+            // LiteLLM tự xử lý Load Balancing & Fallback — không cần code thêm ở đây
+            log.info("[AiJob:{}] Đang gọi LiteLLM Proxy để sinh câu hỏi...", jobId);
+            List<Question> questions;
+            if (!extractedImages.isEmpty()) {
+                questions = liteLlmService.generateQuestionsWithImages(extractedText, extractedImages, count);
+            } else {
+                questions = liteLlmService.generateQuestions(extractedText, count);
             }
 
-            // ── Bước 3: Lưu kết quả → DONE ──────────────────────
+            // ── Bước 3: Lưu kết quả → DONE ───────────────────────────────────────
+            long duration = System.currentTimeMillis() - startTime;
             AiJob job = aiJobRepository.findById(jobId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy job: " + jobId));
 
-            long duration = System.currentTimeMillis() - startTime;
             job.setStatus("DONE");
             job.setQuestions(questions);
             job.setExtractedText(extractedText);
             job.setExtractedImages(extractedImages);
-            job.setProvider(usedProvider);
+            job.setProvider("LiteLLM Proxy (Auto Load Balanced)");
             job.setProcessingTimeMs(duration);
             aiJobRepository.save(job);
 
-            log.info("[AiJob:{}] Hoàn thành (provider: {}) — {} câu hỏi trong {}ms", 
-                jobId, usedProvider, questions.size(), duration);
+            log.info("[AiJob:{}] Hoàn thành — {} câu hỏi trong {}ms", jobId, questions.size(), duration);
 
         } catch (Exception e) {
             log.error("[AiJob:{}] Thất bại — {}", jobId, e.getMessage(), e);
@@ -120,47 +100,37 @@ public class AiProcessingService {
     }
 
     /**
-     * Xử lý pipeline AI tạo câu hỏi từ chủ đề (không cần tài liệu).
+     * Xử lý pipeline AI sinh câu hỏi từ chủ đề (không cần tài liệu).
      * Sử dụng cùng cơ chế Async Job / Polling như processJob.
+     *
+     * @param jobId      ID của AiJob đã tạo với status=PROCESSING
+     * @param topic      Chủ đề hoặc prompt mô tả đề thi
+     * @param difficulty Mức độ khó: EASY | MEDIUM | HARD | EXPERT
+     * @param language   Ngôn ngữ: "vi" | "en"
+     * @param count      Số câu hỏi cần tạo
      */
     @Async
     public CompletableFuture<Void> processTopicJob(String jobId, String topic, String difficulty, String language, int count) {
         long startTime = System.currentTimeMillis();
-        log.info("[AiJob:{}] [Topic] Bắt đầu xử lý — chủ đề: '{}', độ khó: {}, số câu: {}", jobId, topic, difficulty, count);
+        log.info("[AiJob:{}] [Topic] Bắt đầu — chủ đề: '{}', độ khó: {}, số câu: {}", jobId, topic, difficulty, count);
 
         try {
-            // Thử Gemini trước
-            List<Question> questions;
-            String usedProvider = "Gemini (gemini-2.5-flash)";
-            try {
-                questions = geminiService.generateByTopic(topic, difficulty, language, count);
-            } catch (Exception geminiEx) {
-                log.warn("[AiJob:{}] [Topic] Gemini thất bại: {}", jobId, geminiEx.getMessage());
-                if (isQuotaError(geminiEx)) {
-                    log.warn("[AiJob:{}] [Topic] Chuyển sang Groq dự phòng...", jobId);
-                    usedProvider = "Groq (llama3-70b)";
-                    // Groq fallback dùng lại extractedText là topic dưới dạng hướng dẫn
-                    String fallbackPrompt = "Chủ đề: " + topic + ". Độ khó: " + difficulty;
-                    questions = groqService.generateQuestions(fallbackPrompt, count);
-                } else {
-                    throw geminiEx;
-                }
-            }
+            log.info("[AiJob:{}] [Topic] Đang gọi LiteLLM Proxy...", jobId);
+            List<Question> questions = liteLlmService.generateByTopic(topic, difficulty, language, count);
 
-            // Lưu kết quả → DONE
+            long duration = System.currentTimeMillis() - startTime;
             AiJob job = aiJobRepository.findById(jobId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy job: " + jobId));
-            long duration = System.currentTimeMillis() - startTime;
+
             job.setStatus("DONE");
             job.setQuestions(questions);
-            job.setExtractedText("[Generated from topic prompt] " + topic);
+            job.setExtractedText("[Generated from topic] " + topic);
             job.setExtractedImages(List.of());
-            job.setProvider(usedProvider);
+            job.setProvider("LiteLLM Proxy (Auto Load Balanced)");
             job.setProcessingTimeMs(duration);
             aiJobRepository.save(job);
 
-            log.info("[AiJob:{}] [Topic] Hoàn thành (provider: {}) — {} câu hỏi trong {}ms",
-                jobId, usedProvider, questions.size(), duration);
+            log.info("[AiJob:{}] [Topic] Hoàn thành — {} câu hỏi trong {}ms", jobId, questions.size(), duration);
 
         } catch (Exception e) {
             log.error("[AiJob:{}] [Topic] Thất bại — {}", jobId, e.getMessage(), e);
@@ -170,9 +140,9 @@ public class AiProcessingService {
         return CompletableFuture.completedFuture(null);
     }
 
-    // ─────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
     // HELPERS
-    // ─────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
 
     private void failJob(String jobId, String errorMessage) {
         try {
@@ -187,46 +157,16 @@ public class AiProcessingService {
         }
     }
 
-    /**
-     * Kiểm tra xem exception có cần fallback sang Groq không.
-     * Kích hoạt khi:
-     *   - 429 / RESOURCE_EXHAUSTED / quota: Gemini hết lượt free
-     *   - 403 permission_denied: API key bị khóa/lộ
-     *   - 503 / UNAVAILABLE: Gemini server quá tải hoặc tạm ngừng
-     *   - Lỗi parse JSON: thinking model trả về định dạng không hợp lệ
-     */
-    private boolean isQuotaError(Exception e) {
-        String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
-        return msg.contains("429")
-            || msg.contains("resource_exhausted")
-            || msg.contains("ratequota")
-            || msg.contains("quota")
-            || (msg.contains("403") && msg.contains("permission_denied"))
-            || msg.contains("reported as leaked")
-            // 503: Gemini server quá tải hoặc tạm thời không khả dụng → fallback Groq
-            || msg.contains("503")
-            || msg.contains("unavailable")
-            // Fallback khi Gemini trả về định dạng không hợp lệ (thinking model, parse fail)
-            || msg.contains("định dạng không hợp lệ")
-            || msg.contains("thought hoặc rỗng")
-            || msg.contains("content null")
-            || msg.contains("candidates rỗng");
-    }
-
-    /** Chuyển exception thành thông báo lỗi thân thiện với người dùng */
     private String buildUserFriendlyError(Exception e) {
         String msg = e.getMessage() != null ? e.getMessage() : "";
         if (msg.contains("429") || msg.contains("RESOURCE_EXHAUSTED")) {
-            return "Lỗi 429: " + msg;
+            return "Tất cả AI keys đã hết quota. Vui lòng thử lại sau 1 phút.";
         }
-        if (msg.contains("503") || msg.contains("UNAVAILABLE")) {
-            return "Dịch vụ AI tạm thời không khả dụng (503). Vui lòng thử lại sau.";
+        if (msg.contains("503") || msg.contains("UNAVAILABLE") || msg.contains("Connection refused")) {
+            return "Dịch vụ AI tạm thời không khả dụng. Vui lòng kiểm tra LiteLLM Proxy đang chạy.";
         }
         if (msg.contains("400") || msg.contains("INVALID_ARGUMENT")) {
-            return "Lỗi 400: " + msg;
-        }
-        if (msg.contains("candidates rỗng")) {
-            return "AI không tạo được câu hỏi từ tài liệu này. Hãy kiểm tra nội dung tài liệu.";
+            return "Lỗi 400: Tài liệu không hợp lệ hoặc quá ngắn để sinh câu hỏi.";
         }
         return "Lỗi xử lý AI: " + msg;
     }
