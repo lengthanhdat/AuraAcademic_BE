@@ -39,6 +39,20 @@ public class ClassroomController {
         User teacher = userRepository.findByEmail(auth.getName()).orElse(null);
         if (teacher == null) return ResponseEntity.status(401).body("Unauthorized");
 
+        // Sandbox limit: STANDARD teachers can create at most 2 classrooms
+        String verStatus = teacher.getVerificationStatus();
+        boolean isStandardTeacher = "teacher".equalsIgnoreCase(teacher.getRole())
+                && (verStatus == null || "STANDARD".equals(verStatus) || "PENDING".equals(verStatus) || "REJECTED".equals(verStatus));
+        if (isStandardTeacher) {
+            long ownedCount = classroomRepository.findByTeacherIdOrderByCreatedAtDesc(teacher.getId()).size();
+            if (ownedCount >= 2) {
+                return ResponseEntity.status(403).body(Map.of(
+                    "error", "Tài khoản dùng thử chỉ được tạo tối đa 2 lớp học. Vui lòng xác thực tài khoản để mở khóa.",
+                    "requiresVerification", true
+                ));
+            }
+        }
+
         req.setTeacherId(teacher.getId());
         req.setTeacherName(teacher.getFullName() != null ? teacher.getFullName() : teacher.getEmail());
         req.setCreatedAt(LocalDateTime.now());
@@ -186,6 +200,7 @@ public class ClassroomController {
             return ResponseEntity.badRequest().body("Học sinh này đã có trong lớp.");
         }
 
+
         // Tự động thêm vào danh sách chính thức
         classroom.getStudentIds().add(student.getId());
         classroom.getPendingStudentIds().remove(student.getId());
@@ -204,6 +219,7 @@ public class ClassroomController {
         if (!classroom.getTeacherId().equals(teacher.getId())) return ResponseEntity.status(403).body("Unauthorized");
 
         if (classroom.getPendingStudentIds().remove(studentId)) {
+
             if (!classroom.getStudentIds().contains(studentId)) {
                 classroom.getStudentIds().add(studentId);
             }

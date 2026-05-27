@@ -1,10 +1,12 @@
 package com.auracademic.backend.controller;
 
 import com.auracademic.backend.model.AuditLog;
+import com.auracademic.backend.model.Notification;
 import com.auracademic.backend.model.User;
 import com.auracademic.backend.repository.AuditLogRepository;
 import com.auracademic.backend.repository.ExamRepository;
 import com.auracademic.backend.repository.ExamResultRepository;
+import com.auracademic.backend.repository.NotificationRepository;
 import com.auracademic.backend.repository.UserRepository;
 import com.auracademic.backend.util.ClientInfoUtil;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,7 +20,6 @@ import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/admin")
-
 public class AdminController {
 
     @Autowired
@@ -32,6 +33,9 @@ public class AdminController {
 
     @Autowired
     private AuditLogRepository auditLogRepository;
+
+    @Autowired
+    private NotificationRepository notificationRepository;
 
     // ─── Stats ───────────────────────────────────────────────────────────────
 
@@ -47,6 +51,9 @@ public class AdminController {
             long totalResults  = resultRepository.count();
             long verifiedUsers = userRepository.findAll().stream().filter(User::isEmailVerified).count();
             long lockedUsers   = userRepository.findAll().stream().filter(User::isAccountLocked).count();
+            long pendingVerifications = userRepository.findAll().stream()
+                .filter(u -> "teacher".equalsIgnoreCase(u.getRole()) && "PENDING".equals(u.getVerificationStatus()))
+                .count();
 
             Map<String, Object> stats = new HashMap<>();
             stats.put("totalUsers", totalUsers);
@@ -58,6 +65,7 @@ public class AdminController {
             stats.put("totalResults", totalResults);
             stats.put("verifiedUsers", verifiedUsers);
             stats.put("lockedUsers", lockedUsers);
+            stats.put("pendingVerifications", pendingVerifications);
 
             return ResponseEntity.ok(stats);
         } catch (Exception e) {
@@ -67,7 +75,7 @@ public class AdminController {
 
     // ─── Users CRUD ───────────────────────────────────────────────────────────
 
-    /** GET /api/admin/users — danh sách tất cả người dùng */
+    /** GET /api/admin/users */
     @GetMapping("/users")
     public ResponseEntity<?> getAllUsers(
             @RequestParam(required = false) String role,
@@ -91,7 +99,7 @@ public class AdminController {
         }
     }
 
-    /** GET /api/admin/users/{id} — chi tiết một người dùng */
+    /** GET /api/admin/users/{id} */
     @GetMapping("/users/{id}")
     public ResponseEntity<?> getUserById(@PathVariable String id) {
         return userRepository.findById(id)
@@ -99,7 +107,7 @@ public class AdminController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    /** POST /api/admin/users — tạo người dùng mới */
+    /** POST /api/admin/users */
     @PostMapping("/users")
     public ResponseEntity<?> createUser(@RequestBody Map<String, String> body) {
         try {
@@ -110,7 +118,7 @@ public class AdminController {
             User user = new User();
             user.setFullName(body.get("fullName"));
             user.setEmail(email);
-            user.setPassword("[TEMP]"); // admin nên gửi link reset
+            user.setPassword("[TEMP]");
             user.setRole(body.getOrDefault("role", "student"));
             user.setProvider("local");
             user.setEmailVerified(true);
@@ -125,7 +133,7 @@ public class AdminController {
         }
     }
 
-    /** PUT /api/admin/users/{id} — cập nhật thông tin người dùng */
+    /** PUT /api/admin/users/{id} */
     @PutMapping("/users/{id}")
     public ResponseEntity<?> updateUser(@PathVariable String id, @RequestBody Map<String, Object> body) {
         return userRepository.findById(id).map(user -> {
@@ -174,7 +182,7 @@ public class AdminController {
         }).orElse(ResponseEntity.notFound().build());
     }
 
-    /** PUT /api/admin/users/{id}/lock — khoá / mở khoá tài khoản */
+    /** PUT /api/admin/users/{id}/lock */
     @PutMapping("/users/{id}/lock")
     public ResponseEntity<?> toggleLock(@PathVariable String id, @RequestBody Map<String, Object> body, java.security.Principal principal) {
         boolean lock = (Boolean) body.getOrDefault("locked", true);
@@ -192,7 +200,6 @@ public class AdminController {
 
     // ─── Audit Logs ───────────────────────────────────────────────────────────
 
-    /** GET /api/admin/audit-logs?limit=50 */
     @GetMapping("/audit-logs")
     public ResponseEntity<?> getAuditLogs(@RequestParam(defaultValue = "100") int limit) {
         try {
@@ -217,7 +224,6 @@ public class AdminController {
         }
     }
 
-    /** GET /api/admin/audit-logs/summary — thống kê nhanh audit */
     @GetMapping("/audit-logs/summary")
     public ResponseEntity<?> getAuditSummary() {
         try {
@@ -241,9 +247,9 @@ public class AdminController {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
+
     // ─── Exams ─────────────────────────────────────────────────────────────────
 
-    /** GET /api/admin/exams — danh sách bài thi */
     @GetMapping("/exams")
     public ResponseEntity<?> getAllExams() {
         try {
@@ -253,7 +259,6 @@ public class AdminController {
         }
     }
 
-    /** DELETE /api/admin/exams/{id} */
     @DeleteMapping("/exams/{id}")
     public ResponseEntity<?> deleteExam(@PathVariable String id) {
         try {
@@ -266,6 +271,7 @@ public class AdminController {
     }
 
     // ─── Settings ──────────────────────────────────────────────────────────────
+
     @Autowired
     private com.auracademic.backend.service.SettingService settingService;
 
@@ -338,6 +344,103 @@ public class AdminController {
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
+    }
+
+    // ─── Teacher Verification Management ──────────────────────────────────────
+
+    /** GET /api/admin/verification-requests?status=PENDING|VERIFIED|REJECTED|ALL */
+    @GetMapping("/verification-requests")
+    public ResponseEntity<?> getVerificationRequests(
+            @RequestParam(required = false, defaultValue = "PENDING") String status) {
+        try {
+            List<Map<String, Object>> requests = userRepository.findAll().stream()
+                .filter(u -> "teacher".equalsIgnoreCase(u.getRole()))
+                .filter(u -> {
+                    String s = u.getVerificationStatus() != null ? u.getVerificationStatus() : "STANDARD";
+                    return "ALL".equalsIgnoreCase(status) || status.equalsIgnoreCase(s);
+                })
+                .sorted((a, b) -> {
+                    if (a.getVerificationRequestedAt() == null) return 1;
+                    if (b.getVerificationRequestedAt() == null) return -1;
+                    return b.getVerificationRequestedAt().compareTo(a.getVerificationRequestedAt());
+                })
+                .map(u -> {
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("id", u.getId());
+                    map.put("fullName", u.getFullName());
+                    map.put("email", u.getEmail());
+                    map.put("verificationStatus", u.getVerificationStatus() != null ? u.getVerificationStatus() : "STANDARD");
+                    map.put("verificationProofUrl", u.getVerificationProofUrl());
+                    map.put("verificationProofType", u.getVerificationProofType());
+                    map.put("verificationNote", u.getVerificationNote());
+                    map.put("verificationRequestedAt", u.getVerificationRequestedAt());
+                    map.put("verifiedAt", u.getVerifiedAt());
+                    return map;
+                })
+                .collect(Collectors.toList());
+
+            long pendingCount = userRepository.findAll().stream()
+                .filter(u -> "teacher".equalsIgnoreCase(u.getRole()) && "PENDING".equals(u.getVerificationStatus()))
+                .count();
+
+            return ResponseEntity.ok(Map.of("requests", requests, "pendingCount", pendingCount));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /** POST /api/admin/verification-requests/{userId}/approve */
+    @PostMapping("/verification-requests/{userId}/approve")
+    public ResponseEntity<?> approveVerification(@PathVariable String userId) {
+        return userRepository.findById(userId).map(user -> {
+            if (!"teacher".equalsIgnoreCase(user.getRole())) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Người dùng không phải giáo viên."));
+            }
+            user.setVerificationStatus("VERIFIED");
+            user.setVerifiedAt(LocalDateTime.now());
+            user.setVerificationNote(null);
+            userRepository.save(user);
+
+            try {
+                Notification notification = new Notification();
+                notification.setUserId(user.getId());
+                notification.setTitle("Tài khoản đã được xác thực 🎉");
+                notification.setContent("Chúc mừng! Tài khoản giáo viên của bạn đã được xác thực thành công. Toàn bộ tính năng đã được mở khóa.");
+                notification.setType("VERIFICATION_APPROVED");
+                notification.setRead(false);
+                notification.setCreatedAt(LocalDateTime.now());
+                notificationRepository.save(notification);
+            } catch (Exception ignored) {}
+
+            return ResponseEntity.ok(Map.of("message", "Đã duyệt tài khoản giáo viên.", "status", "VERIFIED"));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    /** POST /api/admin/verification-requests/{userId}/reject */
+    @PostMapping("/verification-requests/{userId}/reject")
+    public ResponseEntity<?> rejectVerification(@PathVariable String userId, @RequestBody Map<String, String> body) {
+        String note = body.getOrDefault("note", "Thông tin chứng minh không đủ điều kiện xác thực.");
+        return userRepository.findById(userId).map(user -> {
+            if (!"teacher".equalsIgnoreCase(user.getRole())) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Người dùng không phải giáo viên."));
+            }
+            user.setVerificationStatus("REJECTED");
+            user.setVerificationNote(note);
+            userRepository.save(user);
+
+            try {
+                Notification notification = new Notification();
+                notification.setUserId(user.getId());
+                notification.setTitle("Yêu cầu xác thực chưa được chấp thuận");
+                notification.setContent("Lý do: " + note + " Bạn có thể gửi lại yêu cầu với thông tin bổ sung.");
+                notification.setType("VERIFICATION_REJECTED");
+                notification.setRead(false);
+                notification.setCreatedAt(LocalDateTime.now());
+                notificationRepository.save(notification);
+            } catch (Exception ignored) {}
+
+            return ResponseEntity.ok(Map.of("message", "Đã từ chối yêu cầu xác thực.", "status", "REJECTED"));
+        }).orElse(ResponseEntity.notFound().build());
     }
 
     private String normalizeDisplayIp(String ipAddress) {

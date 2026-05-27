@@ -22,6 +22,15 @@ public class User {
     private String password;
     private String role; // "student", "teacher", "admin"
 
+    // Teacher verification fields (Hybrid Sandbox Model)
+    // States: STANDARD (default) → PENDING → VERIFIED | REJECTED
+    private String verificationStatus; // "STANDARD", "PENDING", "VERIFIED", "REJECTED"
+    private String verificationProofUrl;
+    private String verificationProofType; // "LINK", "DOCUMENT"
+    private String verificationNote;
+    private LocalDateTime verificationRequestedAt;
+    private LocalDateTime verifiedAt;
+
     
     private String provider = "local";
     private String providerId;
@@ -309,5 +318,53 @@ public String getId() {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public String getVerificationStatus() {
+        return verificationStatus;
+    }
+
+    public void setVerificationStatus(String verificationStatus) {
+        this.verificationStatus = verificationStatus;
+    }
+
+    public String getVerificationProofUrl() {
+        return verificationProofUrl;
+    }
+
+    public void setVerificationProofUrl(String verificationProofUrl) {
+        this.verificationProofUrl = verificationProofUrl;
+    }
+
+    public String getVerificationProofType() {
+        return verificationProofType;
+    }
+
+    public void setVerificationProofType(String verificationProofType) {
+        this.verificationProofType = verificationProofType;
+    }
+
+    public String getVerificationNote() {
+        return verificationNote;
+    }
+
+    public void setVerificationNote(String verificationNote) {
+        this.verificationNote = verificationNote;
+    }
+
+    public LocalDateTime getVerificationRequestedAt() {
+        return verificationRequestedAt;
+    }
+
+    public void setVerificationRequestedAt(LocalDateTime verificationRequestedAt) {
+        this.verificationRequestedAt = verificationRequestedAt;
+    }
+
+    public LocalDateTime getVerifiedAt() {
+        return verifiedAt;
+    }
+
+    public void setVerifiedAt(LocalDateTime verifiedAt) {
+        this.verifiedAt = verifiedAt;
     }
 }

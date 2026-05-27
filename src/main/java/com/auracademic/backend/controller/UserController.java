@@ -14,6 +14,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -145,6 +146,62 @@ public class UserController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<UserProfileResponse> getUserById(@PathVariable String id) {
         return ResponseEntity.ok(userService.getProfile(id));
+    }
+
+    // ─── Teacher Verification ─────────────────────────────────────────────────
+
+    /** POST /api/users/verification-request — Teacher submits verification proof */
+    @PostMapping("/verification-request")
+    @PreAuthorize("hasRole('TEACHER')")
+    public ResponseEntity<?> submitVerificationRequest(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestBody TeacherVerificationRequest request) {
+        return userRepository.findById(principal.getId()).map(user -> {
+            String currentStatus = user.getVerificationStatus();
+            // Only STANDARD or REJECTED teachers can submit
+            if ("PENDING".equals(currentStatus) || "VERIFIED".equals(currentStatus)) {
+                return ResponseEntity.badRequest().body(Map.of(
+                    "error", "PENDING".equals(currentStatus)
+                        ? "Yêu cầu của bạn đang được xem xét."
+                        : "Tài khoản của bạn đã được xác thực."
+                ));
+            }
+            if (request.getProofUrl() == null || request.getProofUrl().isBlank()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Vui lòng cung cấp liên kết hoặc ảnh chứng minh."));
+            }
+            user.setVerificationStatus("PENDING");
+            user.setVerificationProofUrl(request.getProofUrl());
+            user.setVerificationProofType(request.getProofType());
+            user.setVerificationNote(null);
+            user.setVerificationRequestedAt(java.time.LocalDateTime.now());
+            userRepository.save(user);
+
+            TeacherVerificationResponse response = new TeacherVerificationResponse(
+                "PENDING",
+                user.getVerificationRequestedAt(),
+                null,
+                null,
+                "Yêu cầu xác thực đã được gửi. Chúng tôi sẽ phản hồi trong vòng 24 giờ."
+            );
+            return ResponseEntity.ok(response);
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    /** GET /api/users/me/verification — Get current verification status */
+    @GetMapping("/me/verification")
+    @PreAuthorize("hasRole('TEACHER')")
+    public ResponseEntity<?> getVerificationStatus(
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return userRepository.findById(principal.getId()).map(user -> {
+            TeacherVerificationResponse response = new TeacherVerificationResponse(
+                user.getVerificationStatus() != null ? user.getVerificationStatus() : "STANDARD",
+                user.getVerificationRequestedAt(),
+                user.getVerifiedAt(),
+                user.getVerificationNote(),
+                null
+            );
+            return ResponseEntity.ok(response);
+        }).orElse(ResponseEntity.notFound().build());
     }
 
     private String getClientIp(HttpServletRequest request) {
