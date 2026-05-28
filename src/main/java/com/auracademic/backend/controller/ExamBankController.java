@@ -72,18 +72,6 @@ public class ExamBankController {
     @GetMapping("/exams")
     @org.springframework.security.access.prepost.PreAuthorize("hasRole('TEACHER') or hasRole('ADMIN')")
     public ResponseEntity<?> getAllBankExamsForManagement(org.springframework.security.core.Authentication auth) {
-        if (auth != null && auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_TEACHER"))) {
-            com.auracademic.backend.model.User teacher = userRepository.findByEmail(auth.getName()).orElse(null);
-            if (teacher != null) {
-                String verStatus = teacher.getVerificationStatus();
-                if (verStatus == null || !"VERIFIED".equals(verStatus)) {
-                    return org.springframework.http.ResponseEntity.status(403).body(java.util.Map.of(
-                        "error", "Chỉ giáo viên đã xác thực mới có thể truy cập Ngân hàng đề thi chung. Vui lòng xác thực tài khoản.",
-                        "requiresVerification", true
-                    ));
-                }
-            }
-        }
         // Fetch all practice exams including DRAFT
         List<java.util.Map<String, Object>> result = examRepository.findByIsPractice(true).stream()
             .map(exam -> {
@@ -104,6 +92,8 @@ public class ExamBankController {
                 long plays = practiceResultRepository.countByExamId(exam.getId());
                 dto.put("submissionCount", plays);
                 dto.put("subject", exam.getSubject());
+                dto.put("grade", exam.getGrade());
+                dto.put("teacherId", exam.getTeacherId());
                 return dto;
             })
             .sorted(java.util.Comparator.comparing(
@@ -233,19 +223,6 @@ public class ExamBankController {
     @org.springframework.security.access.prepost.PreAuthorize("hasRole('TEACHER') or hasRole('ADMIN')")
     public ResponseEntity<?> getTeacherItemsInFolder(@PathVariable String folderId,
             org.springframework.security.core.Authentication auth) {
-        // Sandbox: only VERIFIED teachers can access the shared exam bank (to prevent students from accessing answers)
-        if (auth != null && auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_TEACHER"))) {
-            com.auracademic.backend.model.User teacher = userRepository.findByEmail(auth.getName()).orElse(null);
-            if (teacher != null) {
-                String verStatus = teacher.getVerificationStatus();
-                if (verStatus == null || !"VERIFIED".equals(verStatus)) {
-                    return org.springframework.http.ResponseEntity.status(403).body(java.util.Map.of(
-                        "error", "Chỉ giáo viên đã xác thực mới có thể truy cập Ngân hàng đề thi chung. Vui lòng xác thực tài khoản.",
-                        "requiresVerification", true
-                    ));
-                }
-            }
-        }
         List<Exam> items = examRepository.findByFolderId(folderId).stream()
                 .filter(exam -> exam.isPractice() || exam.isBankItem())
                 .toList();
