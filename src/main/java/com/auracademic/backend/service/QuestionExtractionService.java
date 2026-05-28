@@ -2,6 +2,7 @@ package com.auracademic.backend.service;
 
 import com.auracademic.backend.dto.ParsedQuestion;
 import com.auracademic.backend.model.Question;
+import com.auracademic.backend.service.LiteLlmService;
 import org.apache.poi.util.IOUtils;
 import org.apache.poi.xwpf.usermodel.*;
 import org.apache.pdfbox.Loader;
@@ -41,7 +42,7 @@ public class QuestionExtractionService {
     private static final Logger log = LoggerFactory.getLogger(QuestionExtractionService.class);
 
     @Autowired
-    private GeminiService geminiService;
+    private LiteLlmService liteLlmService;
 
     private static final Pattern QUESTION_NUMBER_STRIPPED = Pattern.compile(
         "^\\s*(cau|question|item|bai)?\\s*(\\d+)\\s*([.:)\\-\u2013]*)\\s*(.*)$"
@@ -162,8 +163,8 @@ public class QuestionExtractionService {
                         "Tách biệt phần câu hỏi và phần đáp án A, B, C, D rõ ràng. " +
                         "Đánh dấu đáp án đúng nếu có dấu hiệu trong ảnh (tô đậm, gạch chân, dấu sao).";
 
-        log.info("[Extract] Gọi Gemini Vision để phân tích PDF scan...");
-        List<Question> aiQuestions = geminiService.refineQuestions(prompt, "", base64Images);
+        log.info("[Extract] Gọi LiteLLM Vision để phân tích PDF scan...");
+        List<Question> aiQuestions = liteLlmService.refineQuestions(prompt, "", base64Images);
 
         List<ParsedQuestion> result = new ArrayList<>();
         int qCounter = 1;

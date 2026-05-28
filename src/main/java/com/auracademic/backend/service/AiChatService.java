@@ -19,10 +19,7 @@ public class AiChatService {
     private static final Logger log = LoggerFactory.getLogger(AiChatService.class);
 
     @Autowired
-    private GeminiService geminiService;
-
-    @Autowired
-    private GroqService groqService;
+    private LiteLlmService liteLlmService;
 
     @Autowired
     private ChatMessageRepository messageRepository;
@@ -71,22 +68,17 @@ public class AiChatService {
     }
 
     /**
-     * Nhận tin nhắn từ người dùng, xây dựng context prompt học thuật và gọi LLM sinh phản hồi.
-     * Sử dụng chiến lược Ưu tiên Gemini 2.5 Flash ➡️ Tự động Fallback sang Groq nếu bị lỗi/hết quota.
+     * Nhận tin nhắn từ người dùng, xây dựng context prompt học thuật và gọi LiteLLM sinh phản hồi.
+     * Load Balancing và Fallback tự động xử lý bởi LiteLLM Proxy.
      */
     public String getAiResponse(String userMessage, String userName) {
         String prompt = buildChatPrompt(userMessage, userName);
         try {
-            log.info("[AiChatService] Đang yêu cầu phản hồi AI cho người dùng: {}", userName);
-            return geminiService.generateChatResponse(prompt);
+            log.info("[AiChatService] Đang yêu cầu phản hồi AI (LiteLLM) cho người dùng: {}", userName);
+            return liteLlmService.generateChatResponse(prompt);
         } catch (Exception ex) {
-            log.warn("[AiChatService] Gemini chính gặp sự cố, tiến hành fallback sang Groq. Chi tiết: {}", ex.getMessage());
-            try {
-                return groqService.generateChatResponse(prompt);
-            } catch (Exception e) {
-                log.error("[AiChatService] Cả 2 hệ thống AI đều tê liệt! Lỗi Groq: {}", e.getMessage());
-                return "Trợ lý AI của AuraAcademic tạm thời bận hoặc gặp sự cố đường truyền. Ban quản trị (Admin) đã được thông báo và sẽ trực tiếp trả lời bạn sớm nhất có thể. Cảm ơn bạn!";
-            }
+            log.error("[AiChatService] Lỗi nghiêm trọng khi kết nối AI: {}", ex.getMessage());
+            return "Trợ lý AI của AuraAcademic tạm thời bận hoặc gặp sự cố đường truyền. Ban quản trị (Admin) đã được thông báo và sẽ trực tiếp trả lời bạn sớm nhất có thể. Cảm ơn bạn!";
         }
     }
 

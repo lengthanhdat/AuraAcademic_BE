@@ -77,7 +77,34 @@ public class LiteLlmService {
         log.info("[LiteLLM] Sinh {} câu hỏi từ PDF có {} hình ảnh", questionCount, images.size());
         String prompt = buildGeneratePrompt(documentText, questionCount)
             + "\nQUY TẮC BỔ SUNG: BẮT BUỘC CHUYỂN TẤT CẢ CÁC CÔNG THỨC TOÁN HỌC TRONG ẢNH SANG ĐỊNH DẠNG LATEX (bọc trong `$ ... $` hoặc `$$ ... $$`).";
-        return callLiteLlmWithImages(prompt, images, visionModel);
+        try {
+            // Thử lần 1: Gửi toàn bộ danh sách hình ảnh (thành công nếu các key Gemini hoạt động bình thường)
+            return callLiteLlmWithImages(prompt, images, visionModel);
+        } catch (Exception e) {
+            log.warn("[LiteLLM] Gọi Vision Model '{}' với {} ảnh thất bại: {}. Đang thử phương án dự phòng...", visionModel, images.size(), e.getMessage());
+            
+            // Nếu số lượng ảnh lớn hơn 5, có khả năng ta đã fallback sang Groq/Vision (bị giới hạn tối đa 5 ảnh).
+            // Ta thử rút gọn danh sách xuống 5 ảnh đầu tiên để giữ lại khả năng sinh câu hỏi kèm ảnh.
+            if (images.size() > 5) {
+                log.info("[LiteLLM] Phát hiện có {} ảnh. Thử rút gọn xuống 5 ảnh đầu để tránh giới hạn của mô hình dự phòng (Groq)...", images.size());
+                List<String> croppedImages = images.subList(0, 5);
+                try {
+                    return callLiteLlmWithImages(prompt, croppedImages, visionModel);
+                } catch (Exception ex) {
+                    log.warn("[LiteLLM] Thử gọi Vision với 5 ảnh vẫn thất bại: {}", ex.getMessage());
+                }
+            }
+            
+            // Nếu vẫn thất bại hoặc ban đầu có ít hơn/bằng 5 ảnh, chuyển sang chế độ chỉ xử lý văn bản (text-only)
+            if (documentText != null && documentText.trim().length() >= 10) {
+                log.info("[LiteLLM] Phát hiện văn bản trích xuất hợp lệ ({} ký tự). Đang gọi main-ai ở chế độ text-only (hỗ trợ tự động fallback sang Groq)...", documentText.length());
+                String fallbackPrompt = buildGeneratePrompt(documentText, questionCount);
+                return callLiteLlm(fallbackPrompt, mainModel);
+            } else {
+                log.error("[LiteLLM] Không có đủ văn bản để fallback (ví dụ: PDF dạng scan). Trả về lỗi gốc.");
+                throw e;
+            }
+        }
     }
 
     /**
@@ -97,7 +124,12 @@ public class LiteLlmService {
         String sanitizedText = documentText != null ? documentText : "";
         String prompt = buildRefinePrompt(command, sanitizedText);
         if (images != null && !images.isEmpty()) {
-            return callLiteLlmWithImages(prompt, images, visionModel);
+            try {
+                return callLiteLlmWithImages(prompt, images, visionModel);
+            } catch (Exception e) {
+                log.warn("[LiteLLM] Refine với hình ảnh thất bại: {}. Thử lại chế độ text-only...", e.getMessage());
+                return callLiteLlm(prompt, mainModel);
+            }
         }
         return callLiteLlm(prompt, mainModel);
     }
@@ -292,8 +324,22 @@ public class LiteLlmService {
                 String inner = sanitized.substring(first + 3, last);
                 if (inner.toLowerCase().startsWith("json")) inner = inner.substring(4);
                 sanitized = inner.trim();
+            } else {
+                // Nếu chỉ có một dấu ``` mở (bị cắt cụt), ta tự cắt bỏ phần đó
+                if (sanitized.startsWith("```")) {
+                    int newline = sanitized.indexOf('\n');
+                    if (newline != -1) {
+                        sanitized = sanitized.substring(newline + 1).trim();
+                        if (sanitized.toLowerCase().startsWith("json")) {
+                            sanitized = sanitized.substring(4).trim();
+                        }
+                    }
+                }
             }
         }
+
+        // Sửa JSON bị cắt ngang trước khi tìm arrayStart/arrayEnd
+        sanitized = repairTruncatedJson(sanitized);
 
         // Trích xuất JSON array (bỏ qua text thừa trước/sau)
         int arrayStart = sanitized.indexOf('[');
@@ -304,9 +350,6 @@ public class LiteLlmService {
 
         log.info("[LiteLLM] JSON từ '{}' (500 ký tự đầu): {}", model,
                  sanitized.length() > 500 ? sanitized.substring(0, 500) + "..." : sanitized);
-
-        // Sửa JSON bị cắt ngang
-        sanitized = repairTruncatedJson(sanitized);
 
         List<Map<String, Object>> rawList;
         try {
@@ -345,10 +388,52 @@ public class LiteLlmService {
             mapper.readTree(json);
             return json; // Hợp lệ rồi
         } catch (Exception e) {
-            log.warn("[LiteLLM] JSON bị cắt ngang, đang tự sửa...");
-            int lastComma = json.lastIndexOf(",{\"id\"");
-            if (lastComma == -1) lastComma = json.lastIndexOf(", {\"id\"");
-            if (lastComma > 0) return json.substring(0, lastComma) + "]";
+            log.warn("[LiteLLM] JSON bị cắt ngang, đang sửa bằng bộ quét ngoặc...");
+            
+            int lastValidCloseBrace = -1;
+            int depth = 0;
+            boolean inString = false;
+            boolean escaped = false;
+            
+            for (int i = 0; i < json.length(); i++) {
+                char c = json.charAt(i);
+                
+                if (inString) {
+                    if (escaped) {
+                        escaped = false;
+                    } else if (c == '\\') {
+                        escaped = true;
+                    } else if (c == '"') {
+                        inString = false;
+                    }
+                } else {
+                    if (c == '"') {
+                        inString = true;
+                    } else if (c == '{') {
+                        depth++;
+                    } else if (c == '}') {
+                        depth--;
+                        if (depth == 0) {
+                            lastValidCloseBrace = i;
+                        }
+                    }
+                }
+            }
+            
+            if (lastValidCloseBrace != -1) {
+                String repaired = json.substring(0, lastValidCloseBrace + 1).trim();
+                // Bọc lại dấu ngoặc vuông nếu cần thiết
+                if (!repaired.startsWith("[")) {
+                    repaired = "[" + repaired;
+                }
+                if (!repaired.endsWith("]")) {
+                    repaired = repaired + "]";
+                }
+                log.info("[LiteLLM] Đã sửa JSON thành công. Độ dài từ {} -> {}", json.length(), repaired.length());
+                return repaired;
+            }
+            
+            // Fallback
             if (!json.endsWith("]")) return json + "]";
             return json;
         }
@@ -372,13 +457,13 @@ public class LiteLlmService {
             1. Trích xuất nội dung câu hỏi và 4 phương án y như trong tài liệu gốc.
             2. QUAN TRỌNG: Phải tách BIỆT phần phương án (A, B, C, D) ra khỏi nội dung câu hỏi. Trường `text` TUYỆT ĐỐI KHÔNG ĐƯỢC chứa các chữ A. B. C. D. hay nội dung phương án.
             3. ĐÁNH DẤU ĐÁP ÁN ĐÚNG: Đánh dấu `isCorrect: true` cho đáp án đúng dựa vào gợi ý. Nếu không có, mặc định A là đúng.
-            4. Giữ nguyên các tag ảnh [IMG_0], [IMG_1]... và bảng biểu Markdown ở đúng vị trí.
+            4. BẮT BUỘC: Giữ nguyên các tag ảnh [IMG_0], [IMG_1]... và bảng biểu Markdown ở đúng vị trí. Tag ảnh phải được giữ nguyên và nằm trong trường 'text' của câu hỏi tương ứng (ví dụ: "Hình ảnh sau [IMG_0] mô tả..."). Tuyệt đối không được tự ý xóa hoặc thay đổi tên các tag ảnh [IMG_N] này trong mọi trường hợp, kể cả khi chạy ở chế độ văn bản (text-only).
             5. BẮT BUỘC dùng LaTeX (bọc trong `$ ... $` hoặc `$$ ... $$`) cho TẤT CẢ công thức toán học.
             6. Trả về DUY NHẤT một JSON array. Không giải thích. Không dùng markdown fence (không có ```json).
             7. Nếu không đủ %d câu, tự tạo thêm câu bám sát nội dung để đủ đúng %d câu.
 
             Định dạng JSON:
-            [{"id":"1","type":"Trắc nghiệm","text":"Nội dung câu hỏi","options":[{"id":"a","text":"Nội dung A","isCorrect":true},{"id":"b","text":"Nội dung B","isCorrect":false},{"id":"c","text":"Nội dung C","isCorrect":false},{"id":"d","text":"Nội dung D","isCorrect":false}]}]
+            [{"id":"1","type":"Trắc nghiệm","text":"Nội dung câu hỏi [IMG_0]","options":[{"id":"a","text":"Nội dung A","isCorrect":true},{"id":"b","text":"Nội dung B","isCorrect":false},{"id":"c","text":"Nội dung C","isCorrect":false},{"id":"d","text":"Nội dung D","isCorrect":false}]}]
             """.formatted(text, count, count, count);
     }
 
@@ -426,7 +511,7 @@ public class LiteLlmService {
             1. CHỈ trả về JSON array hợp lệ. Bắt đầu bằng [ và kết thúc bằng ].
             2. TUYỆT ĐỐI KHÔNG dùng markdown fence (không có ```json).
             3. Mỗi câu có đúng 4 lựa chọn, chỉ 1 đúng.
-            4. Giữ nguyên tag ảnh [IMG_0], [IMG_1]... và bảng Markdown.
+            4. BẮT BUỘC: Giữ nguyên tag ảnh [IMG_0], [IMG_1]... và bảng biểu Markdown ở đúng vị trí. Tag ảnh phải được giữ nguyên và nằm trong trường 'text' của câu hỏi tương ứng (ví dụ: "Hình ảnh sau [IMG_0] mô tả..."). Tuyệt đối không được xóa hoặc đổi tên các tag này trong mọi trường hợp.
 
             TÀI LIỆU:
             %s

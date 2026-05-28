@@ -57,7 +57,7 @@ public class DocumentExtractorService {
                             if (imgCount < 10) {
                                 String base64 = resizeAndBase64(pic.getPictureData().getData());
                                 images.add(base64);
-                                sb.append("\n[IMG_").append(imgCount).append("]\n");
+                                sb.append(" [IMG_").append(imgCount).append("] ");
                                 imgCount++;
                             }
                         }
