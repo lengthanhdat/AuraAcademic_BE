@@ -416,7 +416,7 @@ public class ExamController {
     public ResponseEntity<?> getTeacherExams(@PathVariable String teacherId) {
         try {
             List<Exam> exams = examRepository.findByTeacherId(teacherId).stream()
-                    .filter(exam -> !exam.isPractice() && !exam.isBankItem())
+                    .filter(exam -> !exam.isPractice() && !exam.isBankItem() && !exam.isTemplate())
                     .toList();
             for (Exam exam : exams) {
                 applyGlobalExamSettings(exam);
@@ -443,6 +443,24 @@ public class ExamController {
             return ResponseEntity.ok(exams);
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error fetching bank exams: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Lấy danh sách đề mẫu (Kho đề) của giáo viên
+     */
+    @GetMapping("/teacher/{teacherId}/templates")
+    public ResponseEntity<?> getTeacherTemplates(@PathVariable String teacherId) {
+        try {
+            List<Exam> exams = examRepository.findByTeacherId(teacherId).stream()
+                    .filter(Exam::isTemplate)
+                    .toList();
+            for (Exam exam : exams) {
+                applyGlobalExamSettings(exam);
+            }
+            return ResponseEntity.ok(exams);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error fetching templates: " + e.getMessage());
         }
     }
 
@@ -561,6 +579,92 @@ public class ExamController {
             }).orElse(ResponseEntity.notFound().build());
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error removing from bank: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Nhân bản đề thi từ kho mẫu để tạo kỳ thi thực tế (giao bài cho lớp)
+     */
+    @PostMapping("/{id}/clone-to-session")
+    public ResponseEntity<?> cloneToSession(@PathVariable String id, @RequestBody Map<String, Object> payload) {
+        try {
+            return examRepository.findById(id).map(template -> {
+                Exam session = new Exam();
+                session.setTitle(template.getTitle());
+                session.setExtractedImages(template.getExtractedImages());
+                session.setDifficulty(template.getDifficulty());
+                session.setGrade(template.getGrade());
+                session.setSubject(template.getSubject());
+                session.setTeacherId(template.getTeacherId());
+                session.setTeacherName(template.getTeacherName());
+                
+                session.setTemplate(false);
+                session.setPractice(false);
+                session.setBankItem(false);
+
+                // Tạo các phiên bản đề thi dựa trên versionCount
+                int versionCount = 1;
+                if (payload.containsKey("versionCount") && payload.get("versionCount") != null) {
+                    versionCount = ((Number) payload.get("versionCount")).intValue();
+                }
+                
+                List<ExamVersion> versions = new java.util.ArrayList<>();
+                if (template.getVersions() != null && !template.getVersions().isEmpty()) {
+                    List<com.auracademic.backend.model.Question> baseQuestions = template.getVersions().get(0).getQuestions();
+                    String[] codes = {"101", "202", "303", "404"};
+                    for (int i = 0; i < versionCount; i++) {
+                        ExamVersion ver = new ExamVersion();
+                        ver.setVersionCode(i < codes.length ? codes[i] : ("MĐ" + (100 + i)));
+                        List<com.auracademic.backend.model.Question> shuffled = new java.util.ArrayList<>(baseQuestions);
+                        if (i > 0) {
+                            java.util.Collections.shuffle(shuffled);
+                        }
+                        ver.setQuestions(shuffled);
+                        versions.add(ver);
+                    }
+                } else {
+                    session.setVersions(template.getVersions());
+                }
+                session.setVersions(versions);
+                
+                // Cấu hình từ payload
+                if (payload.containsKey("duration")) {
+                    session.setDuration(((Number) payload.get("duration")).intValue());
+                } else {
+                    session.setDuration(template.getDuration());
+                }
+                
+                if (payload.containsKey("shuffle")) {
+                    session.setShuffle((Boolean) payload.get("shuffle"));
+                } else {
+                    session.setShuffle(template.isShuffle());
+                }
+                
+                if (payload.containsKey("aiProctoring")) {
+                    session.setAiProctoring((Boolean) payload.get("aiProctoring"));
+                } else {
+                    session.setAiProctoring(template.isAiProctoring());
+                }
+                
+                if (payload.containsKey("classroomId")) {
+                    session.setClassroomId((String) payload.get("classroomId"));
+                }
+                
+                if (payload.containsKey("scheduledStartTime") && payload.get("scheduledStartTime") != null) {
+                    session.setScheduledStartTime(((Number) payload.get("scheduledStartTime")).longValue());
+                    session.setStatus("PUBLISHED");
+                } else {
+                    session.setStatus("WAITING");
+                }
+                
+                session.setAccessCode(java.util.UUID.randomUUID().toString().substring(0, 6).toUpperCase());
+                session.setCreatedAt(java.time.LocalDateTime.now());
+                
+                Exam savedSession = examRepository.save(session);
+                return ResponseEntity.ok(savedSession);
+            }).orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error cloning exam: " + e.getMessage());
         }
     }
 

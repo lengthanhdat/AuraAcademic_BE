@@ -35,6 +35,9 @@ public class Exam {
     @Field("isBankItem")
     @JsonProperty("isBankItem")
     private boolean isBankItem; // Cờ đánh dấu đề thi này được tạo RIÊNG cho Ngân hàng (không phải luồng thi chính thức)
+    @Field("isTemplate")
+    @JsonProperty("isTemplate")
+    private boolean isTemplate; // Cờ đánh dấu đề thi mẫu/thiết kế (Kho đề)
     private String classroomId; // Liên kết bài thi với lớp học cụ thể (nếu có)
     private LocalDateTime createdAt = LocalDateTime.now();
     
@@ -215,5 +218,13 @@ public class Exam {
     
     public void setClassroomId(String classroomId) {
         this.classroomId = classroomId;
+    }
+
+    public boolean isTemplate() {
+        return isTemplate;
+    }
+
+    public void setTemplate(boolean template) {
+        isTemplate = template;
     }
 }
