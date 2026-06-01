@@ -87,6 +87,19 @@ public class ExamController {
             }
         });
 
+        // Auto-finish trigger: tự động kết thúc bài thi khi hết giờ (phía server, không phụ thuộc vào client giáo viên)
+        examRepository.findFirstByAccessCode(code.toUpperCase()).ifPresent(exam -> {
+            if ("STARTED".equals(exam.getStatus()) && exam.getStartTime() != null && exam.getDuration() > 0) {
+                long endTime = exam.getStartTime() + (long) exam.getDuration() * 60 * 1000;
+                if (System.currentTimeMillis() > endTime) {
+                    exam.setStatus("COMPLETED");
+                    examRepository.save(exam);
+                    examEventService.broadcast(exam.getAccessCode(), "status",
+                        Map.of("status", "COMPLETED"));
+                }
+            }
+        });
+
         String studentId = body.get("studentId");
         String status = body.getOrDefault("status", "LOBBY"); // "LOBBY" hoặc "EXAM"
         if (studentId != null && !studentId.isBlank()) {
@@ -100,7 +113,7 @@ public class ExamController {
                 "examCount",  examCount
             ));
         }
-        // Retrieve current exam status to return as fallback
+        // Retrieve current exam status to return — phản ánh chính xác trạng thái mới nhất
         String currentStatus = examRepository.findFirstByAccessCode(code.toUpperCase())
             .map(Exam::getStatus)
             .orElse("UNKNOWN");
@@ -349,6 +362,16 @@ public class ExamController {
                         // Thông báo realtime cho tất cả client (giáo viên & học sinh)
                         examEventService.broadcast(exam.getAccessCode(), "status",
                             Map.of("status", "STARTED", "startTime", exam.getStartTime()));
+                    }
+                    // Auto-finish logic: Tự động kết thúc khi đã hết giờ
+                    if ("STARTED".equals(exam.getStatus()) && exam.getStartTime() != null && exam.getDuration() > 0) {
+                        long endTime = exam.getStartTime() + (long) exam.getDuration() * 60 * 1000;
+                        if (System.currentTimeMillis() > endTime) {
+                            exam.setStatus("COMPLETED");
+                            examRepository.save(exam);
+                            examEventService.broadcast(exam.getAccessCode(), "status",
+                                Map.of("status", "COMPLETED"));
+                        }
                     }
                     applyGlobalExamSettings(exam);
                     return ResponseEntity.ok(exam);
