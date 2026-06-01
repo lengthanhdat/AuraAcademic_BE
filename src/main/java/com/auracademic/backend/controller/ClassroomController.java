@@ -39,8 +39,7 @@ public class ClassroomController {
     @Autowired
     private com.auracademic.backend.repository.ClassroomPostRepository classroomPostRepository;
 
-    @Autowired
-    private com.auracademic.backend.repository.ExamResultRepository resultRepository;
+
 
     // 1. Tạo lớp học mới (Teacher)
     @PostMapping
