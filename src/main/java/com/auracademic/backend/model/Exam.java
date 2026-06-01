@@ -17,6 +17,7 @@ public class Exam {
     private int duration;
     private boolean shuffle;
     private boolean aiProctoring;
+    private Boolean allowReview = true;
     private String teacherId;
     private String teacherName;
     private String status; // "DRAFT", "PUBLISHED", "FINISHED"
@@ -82,6 +83,14 @@ public class Exam {
 
     public void setAiProctoring(boolean aiProctoring) {
         this.aiProctoring = aiProctoring;
+    }
+
+    public boolean isAllowReview() {
+        return allowReview == null || allowReview;
+    }
+
+    public void setAllowReview(Boolean allowReview) {
+        this.allowReview = allowReview;
     }
 
     public String getTeacherId() {

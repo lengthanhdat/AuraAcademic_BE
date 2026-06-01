@@ -18,6 +18,7 @@ public class ExamResult {
     private int correctAnswers;
     private int totalQuestions;
     private Long submittedAt;
+    private Long timeSpent;
     private Map<String, String> answers; // Map<QuestionID, OptionID>
 
     public String getId() {
@@ -98,5 +99,13 @@ public class ExamResult {
 
     public void setSubmittedAt(Long submittedAt) {
         this.submittedAt = submittedAt;
+    }
+
+    public Long getTimeSpent() {
+        return timeSpent;
+    }
+
+    public void setTimeSpent(Long timeSpent) {
+        this.timeSpent = timeSpent;
     }
 }

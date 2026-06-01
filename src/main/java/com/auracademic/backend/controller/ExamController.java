@@ -22,6 +22,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/exams")
@@ -253,6 +254,7 @@ public class ExamController {
                     info.put("startTime", exam.getStartTime());
                     info.put("scheduledStartTime", exam.getScheduledStartTime());
                     info.put("aiProctoring", isEffectiveAiProctoring(exam));
+                    info.put("allowReview", exam.isAllowReview());
                     info.put("autoDetectCheat", settingService.getBoolean(SettingService.AUTO_DETECT_CHEAT, true));
                     
                     // Determine preview mode for teachers/admins
@@ -347,6 +349,7 @@ public class ExamController {
                     response.put("questions", selectedVersion.getQuestions());
                     response.put("extractedImages", exam.getExtractedImages()); // Cần thiết để hiển thị ảnh trong câu hỏi
                     response.put("aiProctoring", isEffectiveAiProctoring(exam));
+                    response.put("allowReview", exam.isAllowReview());
                     response.put("autoDetectCheat", settingService.getBoolean(SettingService.AUTO_DETECT_CHEAT, true));
                     
                     return ResponseEntity.ok(response);
@@ -434,6 +437,12 @@ public class ExamController {
     public ResponseEntity<?> getExamResultsByAccessCode(@PathVariable String accessCode) {
         try {
             List<ExamResult> results = resultRepository.findByExamId(accessCode);
+            if (results.isEmpty()) {
+                Optional<Exam> exam = examRepository.findFirstByAccessCode(accessCode.toUpperCase());
+                if (exam.isPresent()) {
+                    results = resultRepository.findByExamId(exam.get().getId());
+                }
+            }
             return ResponseEntity.ok(results);
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error fetching results: " + e.getMessage());
@@ -705,6 +714,12 @@ public class ExamController {
                     session.setAiProctoring((Boolean) payload.get("aiProctoring"));
                 } else {
                     session.setAiProctoring(template.isAiProctoring());
+                }
+
+                if (payload.containsKey("allowReview")) {
+                    session.setAllowReview((Boolean) payload.get("allowReview"));
+                } else {
+                    session.setAllowReview(template.isAllowReview());
                 }
                 
                 if (payload.containsKey("classroomId")) {

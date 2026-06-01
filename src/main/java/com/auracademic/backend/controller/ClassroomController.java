@@ -5,6 +5,7 @@ import com.auracademic.backend.model.Exam;
 import com.auracademic.backend.model.User;
 import com.auracademic.backend.repository.ClassroomRepository;
 import com.auracademic.backend.repository.ExamRepository;
+import com.auracademic.backend.repository.ExamResultRepository;
 import com.auracademic.backend.repository.MaterialRepository;
 import com.auracademic.backend.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,6 +29,9 @@ public class ClassroomController {
 
     @Autowired
     private ExamRepository examRepository;
+
+    @Autowired
+    private ExamResultRepository resultRepository;
 
     @Autowired
     private MaterialRepository materialRepository;
@@ -118,7 +122,13 @@ public class ClassroomController {
 
         Map<String, Object> response = new HashMap<>();
         response.put("classroom", classroom);
-        response.put("exams", examRepository.findByClassroomId(id));
+        List<Exam> classroomExams = examRepository.findByClassroomId(id);
+        for (Exam exam : classroomExams) {
+            if (exam.getAccessCode() != null) {
+                exam.setSubmissionCount(resultRepository.countByExamId(exam.getAccessCode()));
+            }
+        }
+        response.put("exams", classroomExams);
         response.put("materials", materialRepository.findByClassroomIdOrderByCreatedAtDesc(id));
 
         // Lấy thông tin chi tiết học sinh chính thức
@@ -382,6 +392,11 @@ public class ClassroomController {
         }
 
         List<Exam> exams = examRepository.findByClassroomId(id);
+        for (Exam exam : exams) {
+            if (exam.getAccessCode() != null) {
+                exam.setSubmissionCount(resultRepository.countByExamId(exam.getAccessCode()));
+            }
+        }
         return ResponseEntity.ok(exams);
     }
 
@@ -409,12 +424,24 @@ public class ClassroomController {
         if (optExam.isEmpty()) return ResponseEntity.status(404).body("Không tìm thấy đề thi gốc.");
         Exam sourceExam = optExam.get();
 
+        boolean alreadyLinked = examRepository.findByClassroomId(id).stream().anyMatch(existing ->
+                Objects.equals(normalize(existing.getTitle()), normalize(sourceExam.getTitle()))
+                        && existing.getDuration() == sourceExam.getDuration()
+                        && Objects.equals(normalize(existing.getSubject()), normalize(sourceExam.getSubject()))
+                        && Objects.equals(normalize(existing.getGrade()), normalize(sourceExam.getGrade()))
+                        && getQuestionCount(existing) == getQuestionCount(sourceExam)
+        );
+        if (alreadyLinked) {
+            return ResponseEntity.status(409).body("Đề thi này đã được giao trong lớp học.");
+        }
+
         // Tiến hành nhân bản đề thi (Clone)
         Exam clonedExam = new Exam();
         clonedExam.setTitle(sourceExam.getTitle());
         clonedExam.setDuration(sourceExam.getDuration());
         clonedExam.setShuffle(sourceExam.isShuffle());
         clonedExam.setAiProctoring(sourceExam.isAiProctoring());
+        clonedExam.setAllowReview(sourceExam.isAllowReview());
         clonedExam.setTeacherId(teacher.getId());
         clonedExam.setTeacherName(teacher.getFullName() != null ? teacher.getFullName() : teacher.getEmail());
         clonedExam.setStatus("PUBLISHED"); // Đặt trạng thái ban đầu là PUBLISHED để học sinh có thể vào phòng chờ
@@ -423,6 +450,7 @@ public class ClassroomController {
         clonedExam.setExtractedImages(sourceExam.getExtractedImages());
         clonedExam.setPractice(false);
         clonedExam.setBankItem(false);
+        clonedExam.setTemplate(false);
         clonedExam.setClassroomId(id);
         clonedExam.setFolderId(sourceExam.getFolderId());
         clonedExam.setGrade(sourceExam.getGrade());
@@ -438,6 +466,17 @@ public class ClassroomController {
 
         Exam savedExam = examRepository.save(clonedExam);
         return ResponseEntity.ok(savedExam);
+    }
+
+    private String normalize(String value) {
+        return value == null ? "" : value.trim().toLowerCase();
+    }
+
+    private int getQuestionCount(Exam exam) {
+        if (exam.getVersions() == null || exam.getVersions().isEmpty() || exam.getVersions().get(0).getQuestions() == null) {
+            return 0;
+        }
+        return exam.getVersions().get(0).getQuestions().size();
     }
 
     // 12. Xóa bài kiểm tra khỏi Lớp học
