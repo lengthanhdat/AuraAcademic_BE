@@ -32,6 +32,9 @@ public class ClassroomController {
     @Autowired
     private MaterialRepository materialRepository;
 
+    @Autowired
+    private com.auracademic.backend.repository.ClassroomPostRepository classroomPostRepository;
+
     // 1. Tạo lớp học mới (Teacher)
     @PostMapping
     @PreAuthorize("hasRole('TEACHER') or hasRole('ADMIN')")
@@ -148,6 +151,23 @@ public class ClassroomController {
         }
         response.put("pendingStudents", pendingDetails);
 
+        // Lấy thông tin chi tiết học sinh đã bị vô hiệu hóa / đã rời lớp
+        List<Map<String, String>> removedDetails = new ArrayList<>();
+        if (classroom.getRemovedStudentIds() != null) {
+            for (String sid : classroom.getRemovedStudentIds()) {
+                userRepository.findById(sid).ifPresent(u -> {
+                    Map<String, String> sInfo = new HashMap<>();
+                    sInfo.put("id", u.getId());
+                    sInfo.put("fullName", u.getFullName() != null ? u.getFullName() : u.getEmail());
+                    sInfo.put("email", u.getEmail());
+                    removedDetails.add(sInfo);
+                });
+            }
+        }
+        response.put("removedStudents", removedDetails);
+        
+        response.put("posts", classroomPostRepository.findByClassroomIdOrderByCreatedAtDesc(id));
+
         return ResponseEntity.ok(response);
     }
 
@@ -244,6 +264,79 @@ public class ClassroomController {
             return ResponseEntity.ok(Map.of("message", "Đã từ chối học sinh."));
         }
         return ResponseEntity.badRequest().body("Học sinh không nằm trong danh sách chờ.");
+    }
+
+    // Xóa/Vô hiệu hóa học sinh
+    @PostMapping("/{id}/remove/{studentId}")
+    @PreAuthorize("hasRole('TEACHER') or hasRole('ADMIN')")
+    public ResponseEntity<?> removeStudent(@PathVariable String id, @PathVariable String studentId, Authentication auth) {
+        User teacher = userRepository.findByEmail(auth.getName()).orElse(null);
+        Classroom classroom = classroomRepository.findById(id).orElse(null);
+
+        if (teacher == null || classroom == null) return ResponseEntity.notFound().build();
+        if (!classroom.getTeacherId().equals(teacher.getId())) return ResponseEntity.status(403).body("Unauthorized");
+
+        if (classroom.getStudentIds().remove(studentId)) {
+            if (classroom.getRemovedStudentIds() == null) {
+                classroom.setRemovedStudentIds(new ArrayList<>());
+            }
+            if (!classroom.getRemovedStudentIds().contains(studentId)) {
+                classroom.getRemovedStudentIds().add(studentId);
+            }
+            classroomRepository.save(classroom);
+            return ResponseEntity.ok(Map.of("message", "Đã xóa học sinh khỏi lớp."));
+        }
+        return ResponseEntity.badRequest().body("Học sinh không có trong lớp.");
+    }
+
+    // Lấy danh sách bài đăng (Bảng tin)
+    @GetMapping("/{id}/posts")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<?> getClassroomPosts(@PathVariable String id, Authentication auth) {
+        Optional<Classroom> opt = classroomRepository.findById(id);
+        if (opt.isEmpty()) return ResponseEntity.notFound().build();
+        Classroom classroom = opt.get();
+
+        User user = userRepository.findByEmail(auth.getName()).orElse(null);
+        if (user == null) return ResponseEntity.status(401).body("Unauthorized");
+
+        boolean isTeacher = user.getId().equals(classroom.getTeacherId());
+        boolean isStudent = classroom.getStudentIds().contains(user.getId());
+        boolean isAdmin = user.getRole().equalsIgnoreCase("ADMIN");
+        if (!isTeacher && !isStudent && !isAdmin) {
+            return ResponseEntity.status(403).body("Không có quyền truy cập.");
+        }
+
+        return ResponseEntity.ok(classroomPostRepository.findByClassroomIdOrderByCreatedAtDesc(id));
+    }
+
+    // Đăng thông báo mới
+    @PostMapping("/{id}/posts")
+    @PreAuthorize("hasRole('TEACHER') or hasRole('ADMIN')")
+    public ResponseEntity<?> createClassroomPost(@PathVariable String id, @RequestBody Map<String, String> payload, Authentication auth) {
+        String content = payload.get("content");
+        if (content == null || content.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body("Nội dung không được để trống.");
+        }
+
+        Optional<Classroom> opt = classroomRepository.findById(id);
+        if (opt.isEmpty()) return ResponseEntity.notFound().build();
+        Classroom classroom = opt.get();
+
+        User teacher = userRepository.findByEmail(auth.getName()).orElse(null);
+        if (teacher == null) return ResponseEntity.status(401).body("Unauthorized");
+
+        if (!classroom.getTeacherId().equals(teacher.getId()) && !teacher.getRole().equalsIgnoreCase("ADMIN")) {
+            return ResponseEntity.status(403).body("Chỉ giáo viên mới được đăng thông báo.");
+        }
+
+        com.auracademic.backend.model.ClassroomPost post = new com.auracademic.backend.model.ClassroomPost();
+        post.setClassroomId(id);
+        post.setAuthorId(teacher.getId());
+        post.setAuthorName(teacher.getFullName() != null ? teacher.getFullName() : teacher.getEmail());
+        post.setContent(content.trim());
+        
+        return ResponseEntity.ok(classroomPostRepository.save(post));
     }
 
     @Autowired

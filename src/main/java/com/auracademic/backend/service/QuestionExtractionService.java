@@ -49,15 +49,15 @@ public class QuestionExtractionService {
     );
 
     private static final Pattern SINGLE_OPTION = Pattern.compile(
-        "^([A-Da-d])[.):–\\-]\\s*(.*)$"
+        "^(?:\\*\\*)?([A-Da-d])(?:\\*\\*)?[.):–\\-]\\s*(.*)$"
     );
 
     private static final Pattern OPTION_SPLIT = Pattern.compile(
-        "(?<=\\S)\\s+(?=[A-Da-d][.):–\\-]\\s*)"
+        "(?<=\\S)\\s+(?=(?:\\*\\*)?[A-Da-d](?:\\*\\*)?[.):–\\-]\\s*)"
     );
 
     private static final Pattern STARTS_WITH_OPTION = Pattern.compile(
-        "^\\s*[A-Da-d][.):–\\-]\\s*.*"
+        "^\\s*(?:\\*\\*)?[A-Da-d](?:\\*\\*)?[.):–\\-]\\s*.*"
     );
 
     private static String stripDiacritics(String s) {
@@ -215,7 +215,8 @@ public class QuestionExtractionService {
             String text = seg.text;
             text = Normalizer.normalize(text, Normalizer.Form.NFC).trim();
 
-            String stripped = stripDiacritics(text).toLowerCase();
+            String cleanText = text.replace("**", "").trim();
+            String stripped = stripDiacritics(cleanText).toLowerCase();
             Matcher qm = QUESTION_NUMBER_STRIPPED.matcher(stripped);
             if (qm.matches()) {
                 String prefix = qm.group(1);
@@ -223,7 +224,7 @@ public class QuestionExtractionService {
                 if (prefix != null || !punct.isEmpty()) {
                     if (current != null) flush(current, qText, opts, currentImg, result);
                     String originalAfterLabel = text.replaceFirst(
-                        "(?i)^\\s*(?:[Cc][\\p{L}]*u|[Qq]uestion|[Ii]tem|[Bb][\\p{L}]*i)?\\s*\\d+\\s*[.:)\\-\u2013]*\\s*", "").trim();
+                        "(?i)^\\s*(?:\\*\\*)?\\s*(?:[Cc][\\p{L}]*u|[Qq]uestion|[Ii]tem|[Bb][\\p{L}]*i)?\\s*(?:\\*\\*)?\\s*\\d+\\s*(?:\\*\\*)?\\s*[.:)\\-\u2013]*\\s*(?:\\*\\*)?\\s*", "").trim();
                     qCounter++;
                     current = new ParsedQuestion();
                     current.setId("q" + qCounter);
@@ -236,7 +237,7 @@ public class QuestionExtractionService {
 
             if (current == null) continue;
 
-            if (STARTS_WITH_OPTION.matcher(text).matches()) {
+            if (STARTS_WITH_OPTION.matcher(cleanText).matches()) {
                 List<ParsedQuestion.ParsedOption> parsed = parseOptionLine(text, seg.bold);
                 if (!parsed.isEmpty()) {
                     opts.addAll(parsed);
@@ -272,6 +273,22 @@ public class QuestionExtractionService {
     private List<ParsedQuestion.ParsedOption> parseOptionLine(String text, boolean bold) {
         List<ParsedQuestion.ParsedOption> list = new ArrayList<>();
         String[] parts = OPTION_SPLIT.split(text.trim());
+        
+        int boldCount = 0;
+        int totalOptions = 0;
+        for (String part : parts) {
+            part = part.trim();
+            if (part.isEmpty()) continue;
+            totalOptions++;
+            if (part.contains("**")) {
+                boldCount++;
+            }
+        }
+        
+        // Chỉ coi bold là đáp án đúng nếu số lượng đáp án in đậm nhỏ hơn tổng số đáp án trên dòng đó
+        // (để tránh trường hợp giáo viên in đậm toàn bộ cả câu hỏi/dòng đáp án)
+        boolean treatBoldAsCorrect = boldCount > 0 && boldCount < totalOptions;
+
         for (String part : parts) {
             part = part.trim();
             if (part.isEmpty()) continue;
@@ -279,8 +296,17 @@ public class QuestionExtractionService {
             if (!m.matches()) continue;
             String label   = m.group(1).toUpperCase();
             String optText = m.group(2).trim();
-            boolean correct = bold || optText.endsWith("*");
-            if (optText.endsWith("*")) optText = optText.substring(0, optText.length() - 1).trim();
+            
+            boolean isBold = part.contains("**") || optText.contains("**");
+            boolean correct = (treatBoldAsCorrect && isBold) || optText.endsWith("*");
+            
+            if (optText.endsWith("*")) {
+                optText = optText.substring(0, optText.length() - 1).trim();
+            }
+            
+            // Xóa tất cả marker markdown bold "**" để nội dung đáp án hiển thị bình thường cho học sinh
+            optText = optText.replace("**", "").trim();
+            
             boolean duplicate = list.stream().anyMatch(o -> o.getLabel().equals(label));
             if (duplicate) continue;
             ParsedQuestion.ParsedOption opt = new ParsedQuestion.ParsedOption();
@@ -376,7 +402,18 @@ public class QuestionExtractionService {
         try {
             String xml = para.getCTP().xmlText();
             if (!xml.contains("oMath")) {
-                return para.getText();
+                StringBuilder sb = new StringBuilder();
+                for (XWPFRun run : para.getRuns()) {
+                    String text = run.toString();
+                    if (text != null && !text.isEmpty()) {
+                        if (run.isBold()) {
+                            sb.append("**").append(text).append("**");
+                        } else {
+                            sb.append(text);
+                        }
+                    }
+                }
+                return sb.toString();
             }
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             factory.setNamespaceAware(true);

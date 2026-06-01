@@ -49,6 +49,9 @@ public class ExamController {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private com.auracademic.backend.repository.ExamBankFolderRepository folderRepository;
+
     /**
      * SSE endpoint — client kết nối để nhận sự kiện theo thời gian thực
      */
@@ -151,6 +154,7 @@ public class ExamController {
             if (exam.getCreatedAt() == null) {
                 exam.setCreatedAt(java.time.LocalDateTime.now());
             }
+            autoCategorizeExamToFolder(exam);
             Exam savedExam = examRepository.save(exam);
             return ResponseEntity.ok(savedExam);
         } catch (Exception e) {
@@ -372,6 +376,7 @@ public class ExamController {
                 });
             }
             applyGlobalExamSettings(exam);
+            autoCategorizeExamToFolder(exam);
             Exam updatedExam = examRepository.save(exam);
             return ResponseEntity.ok(updatedExam);
         } catch (Exception e) {
@@ -557,11 +562,44 @@ public class ExamController {
                 exam.setPractice(true);
                 exam.setBankItem(true);
                 exam.setStatus("PUBLISHED"); // Ensure it's published
+                autoCategorizeExamToFolder(exam);
                 examRepository.save(exam);
                 return ResponseEntity.ok(Map.of("message", "Đã đưa đề thi vào Ngân hàng thành công."));
             }).orElse(ResponseEntity.notFound().build());
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error publishing to bank: " + e.getMessage());
+        }
+    }
+
+    private void autoCategorizeExamToFolder(Exam exam) {
+        if (exam.isPractice()) {
+            String grade = exam.getGrade();
+            String subject = exam.getSubject();
+            if (grade != null && subject != null) {
+                grade = grade.trim();
+                subject = subject.trim();
+                if (!grade.isEmpty() && !subject.isEmpty()) {
+                    try {
+                        java.util.Optional<com.auracademic.backend.model.ExamBankFolder> folderOpt = 
+                            folderRepository.findByGradeAndSubject(grade, subject);
+                        if (folderOpt.isPresent()) {
+                            exam.setFolderId(folderOpt.get().getId());
+                        } else {
+                            com.auracademic.backend.model.ExamBankFolder newFolder = new com.auracademic.backend.model.ExamBankFolder();
+                            newFolder.setName(subject + " - " + grade);
+                            newFolder.setDescription("Thư mục tự động tạo cho chuyên đề " + subject + " - " + grade);
+                            newFolder.setGrade(grade);
+                            newFolder.setSubject(subject);
+                            newFolder.setTeacherId("SYSTEM");
+                            newFolder.setCreatedAt(java.time.LocalDateTime.now());
+                            newFolder = folderRepository.save(newFolder);
+                            exam.setFolderId(newFolder.getId());
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Error auto-categorizing exam to folder: " + e.getMessage());
+                    }
+                }
+            }
         }
     }
 

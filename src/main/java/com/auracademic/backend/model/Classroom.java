@@ -21,6 +21,7 @@ public class Classroom {
     
     private List<String> studentIds = new ArrayList<>();
     private List<String> pendingStudentIds = new ArrayList<>();
+    private List<String> removedStudentIds = new ArrayList<>();
     
     private LocalDateTime createdAt;
     
@@ -52,6 +53,9 @@ public class Classroom {
     
     public List<String> getPendingStudentIds() { return pendingStudentIds; }
     public void setPendingStudentIds(List<String> pendingStudentIds) { this.pendingStudentIds = pendingStudentIds; }
+    
+    public List<String> getRemovedStudentIds() { return removedStudentIds; }
+    public void setRemovedStudentIds(List<String> removedStudentIds) { this.removedStudentIds = removedStudentIds; }
     
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

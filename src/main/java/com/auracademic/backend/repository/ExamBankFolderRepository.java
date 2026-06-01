@@ -9,4 +9,5 @@ import java.util.List;
 @Repository
 public interface ExamBankFolderRepository extends MongoRepository<ExamBankFolder, String> {
     List<ExamBankFolder> findByTeacherId(String teacherId);
+    java.util.Optional<ExamBankFolder> findByGradeAndSubject(String grade, String subject);
 }
