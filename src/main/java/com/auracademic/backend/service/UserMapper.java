@@ -28,6 +28,8 @@ public class UserMapper {
         res.setBio(user.getBio());
         res.setCertificates(user.getCertificates());
         res.setExperience(user.getExperience());
+        res.setProvider(user.getProvider());
+        res.setEmailVerified(user.isEmailVerified());
         res.setTwoFactorEnabled(user.isTwoFactorEnabled());
         res.setCreatedAt(user.getCreatedAt());
         res.setLastLoginAt(user.getLastLoginAt());

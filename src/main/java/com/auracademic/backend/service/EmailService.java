@@ -91,6 +91,25 @@ public class EmailService {
         }
     }
 
+    @Async
+    public void sendTwoFactorOtpEmail(String toEmail, String fullName, String otp, int ttlMinutes) {
+        try {
+            String safeName = escapeHtml(fullName != null ? fullName : "Người dùng");
+            String safeOtp = escapeHtml(otp);
+            String html = """
+                    <div style="font-family:Arial,sans-serif;line-height:1.6;color:#0f172a">
+                      <h2>Mã xác thực hai bước AuraAcademic</h2>
+                      <p>Xin chào %s, đây là mã OTP để xác thực thao tác bảo mật của bạn:</p>
+                      <div style="font-size:32px;font-weight:800;letter-spacing:8px;background:#f1f5f9;border-radius:16px;padding:18px 24px;text-align:center;color:#0c2e5e">%s</div>
+                      <p>Mã có hiệu lực trong %d phút. Không chia sẻ mã này với bất kỳ ai.</p>
+                    </div>
+                    """.formatted(safeName, safeOtp, ttlMinutes);
+            sendHtml(toEmail, "Mã xác thực 2FA AuraAcademic", html);
+        } catch (Exception e) {
+            log.error("Không thể gửi email OTP 2FA tới {}: {}", toEmail, e.getMessage());
+        }
+    }
+
     private void sendHtml(String to, String subject, String htmlContent) throws MessagingException, java.io.UnsupportedEncodingException {
         MimeMessage message = mailSender.createMimeMessage();
         MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");

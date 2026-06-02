@@ -27,6 +27,7 @@ import java.util.UUID;
 @Service
 public class AuthService {
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
+    private static final int TWO_FACTOR_OTP_TTL_MINUTES = 10;
 
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
@@ -121,6 +122,19 @@ public class AuthService {
         }
 
         if (user.isTwoFactorEnabled()) {
+            if (request.getTwoFactorCode() == null || request.getTwoFactorCode().isBlank()) {
+                sendLoginTwoFactorOtp(user);
+                throw new TwoFactorRequiredException("Ma OTP 2FA da duoc gui toi email cua ban");
+            }
+            if (!verifyLoginTwoFactorOtp(user, request.getTwoFactorCode())) {
+                auditLogService.log(user.getId(), user.getEmail(), "FAILED_LOGIN", ipAddress, userAgent, false, "Invalid 2FA code");
+                throw new AuthException("Ma xac thuc 2FA khong dung hoac da het han");
+            }
+            user.setTwoFactorSecret(null);
+            user.setTwoFactorExpiry(null);
+        }
+
+        if (false && user.isTwoFactorEnabled()) {
             if (request.getTwoFactorCode() == null || request.getTwoFactorCode().isBlank()) {
                 throw new TwoFactorRequiredException("Vui lòng nhập mã xác thực 2FA");
             }
@@ -404,6 +418,27 @@ public class AuthService {
 
     public UserProfileResponse mapToProfile(User user) {
         return userMapper.toProfile(user);
+    }
+
+    private void sendLoginTwoFactorOtp(User user) {
+        String otp = String.format("%06d", new java.util.Random().nextInt(1000000));
+        user.setTwoFactorSecret(otp);
+        user.setTwoFactorExpiry(LocalDateTime.now().plusMinutes(TWO_FACTOR_OTP_TTL_MINUTES));
+        userRepository.save(user);
+        emailService.sendTwoFactorOtpEmail(user.getEmail(), user.getFullName(), otp, TWO_FACTOR_OTP_TTL_MINUTES);
+    }
+
+    private boolean verifyLoginTwoFactorOtp(User user, String code) {
+        if (user.getTwoFactorSecret() == null || user.getTwoFactorExpiry() == null) {
+            return false;
+        }
+        if (user.getTwoFactorExpiry().isBefore(LocalDateTime.now())) {
+            user.setTwoFactorSecret(null);
+            user.setTwoFactorExpiry(null);
+            userRepository.save(user);
+            return false;
+        }
+        return user.getTwoFactorSecret().equals(code.trim());
     }
 
     private User buildLocalUser(String fullName, String email, String password, String role) {

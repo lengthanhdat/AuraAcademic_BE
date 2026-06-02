@@ -41,6 +41,7 @@ public class User {
     private LocalDateTime passwordResetExpiry;
     private boolean twoFactorEnabled;
     private String twoFactorSecret;
+    private LocalDateTime twoFactorExpiry;
     private boolean accountLocked;
     private int failedLoginAttempts;
     private LocalDateTime lockExpiry;
@@ -238,6 +239,14 @@ public String getId() {
 
     public void setTwoFactorSecret(String twoFactorSecret) {
         this.twoFactorSecret = twoFactorSecret;
+    }
+
+    public LocalDateTime getTwoFactorExpiry() {
+        return twoFactorExpiry;
+    }
+
+    public void setTwoFactorExpiry(LocalDateTime twoFactorExpiry) {
+        this.twoFactorExpiry = twoFactorExpiry;
     }
 
     public boolean isAccountLocked() {
