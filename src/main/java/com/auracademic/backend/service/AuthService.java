@@ -88,18 +88,12 @@ public class AuthService {
         User user = buildLocalUser(request.getFullName(), request.getEmail(),
                 passwordEncoder.encode(request.getPassword()), request.getRole());
 
-        if (settingService.getBoolean(SettingService.REQUIRE_EMAIL_VERIFY, true)) {
-            String verificationToken = String.format("%06d", new java.util.Random().nextInt(1000000));
-            user.setEmailVerificationToken(verificationToken);
-            user.setEmailVerificationExpiry(LocalDateTime.now().plusMinutes(emailVerificationTtl));
-            userRepository.save(user);
-            emailService.sendVerificationEmail(user.getEmail(), user.getFullName(), verificationToken);
-        } else {
-            user.setEmailVerified(true);
-            user.setEmailVerificationToken(null);
-            user.setEmailVerificationExpiry(null);
-            userRepository.save(user);
-        }
+        user.setEmailVerified(false);
+        String verificationToken = String.format("%06d", new java.util.Random().nextInt(1000000));
+        user.setEmailVerificationToken(verificationToken);
+        user.setEmailVerificationExpiry(LocalDateTime.now().plusMinutes(emailVerificationTtl));
+        userRepository.save(user);
+        emailService.sendVerificationEmail(user.getEmail(), user.getFullName(), verificationToken);
 
         auditLogService.log(user.getId(), user.getEmail(), "REGISTER", ipAddress, null, true, null);
         log.info("Người dùng mới đã đăng ký: {}", user.getEmail());
@@ -186,13 +180,6 @@ public class AuthService {
         if (user.isEmailVerified()) {
             return;
         }
-        if (!settingService.getBoolean(SettingService.REQUIRE_EMAIL_VERIFY, true)) {
-            user.setEmailVerified(true);
-            user.setEmailVerificationToken(null);
-            user.setEmailVerificationExpiry(null);
-            userRepository.save(user);
-            return;
-        }
         if (token == null || !token.equals(user.getEmailVerificationToken())) {
             throw new AuthException("Mã xác thực không hợp lệ");
         }
@@ -209,10 +196,6 @@ public class AuthService {
     }
 
     public void resendVerification(String email) {
-        if (!settingService.getBoolean(SettingService.REQUIRE_EMAIL_VERIFY, true)) {
-            throw new AuthException("Xác thực email đang được tắt.");
-        }
-
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new AuthException("Email không tồn tại"));
 
@@ -307,8 +290,7 @@ public class AuthService {
                 && !"admin".equalsIgnoreCase(user.getRole())) {
             throw new AuthException("Hệ thống đang bảo trì, vui lòng quay lại sau.");
         }
-        if (settingService.getBoolean(SettingService.REQUIRE_EMAIL_VERIFY, true)
-                && !user.isEmailVerified()) {
+        if (!user.isEmailVerified()) {
             throw new AuthException("Tài khoản chưa được xác thực email. Vui lòng kiểm tra hộp thư của bạn.");
         }
     }

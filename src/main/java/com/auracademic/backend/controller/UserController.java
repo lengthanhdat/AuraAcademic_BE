@@ -64,6 +64,9 @@ public class UserController {
         if (!base64Avatar.startsWith("data:image/")) {
             throw new IllegalArgumentException("Định dạng ảnh không hợp lệ (chỉ nhận JPG, PNG, WEBP)");
         }
+        if (base64Avatar.length() > 1_000_000) {
+            throw new IllegalArgumentException("Ảnh đại diện quá lớn, vui lòng chọn ảnh nhỏ hơn.");
+        }
         return ResponseEntity.ok(userService.updateAvatar(principal.getId(), base64Avatar));
     }
 

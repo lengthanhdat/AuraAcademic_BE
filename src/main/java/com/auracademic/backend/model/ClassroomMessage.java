@@ -13,6 +13,7 @@ public class ClassroomMessage {
     private String classroomId;
     private String senderId;
     private String senderName;
+    private String senderAvatarUrl;
     private String senderRole; // "student" or "teacher"
     private String content;
     private LocalDateTime timestamp;
@@ -33,6 +34,9 @@ public class ClassroomMessage {
     
     public String getSenderName() { return senderName; }
     public void setSenderName(String senderName) { this.senderName = senderName; }
+
+    public String getSenderAvatarUrl() { return senderAvatarUrl; }
+    public void setSenderAvatarUrl(String senderAvatarUrl) { this.senderAvatarUrl = senderAvatarUrl; }
     
     public String getSenderRole() { return senderRole; }
     public void setSenderRole(String senderRole) { this.senderRole = senderRole; }

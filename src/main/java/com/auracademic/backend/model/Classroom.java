@@ -5,6 +5,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 @Document(collection = "classrooms")
 public class Classroom {
@@ -22,6 +23,7 @@ public class Classroom {
     private List<String> studentIds = new ArrayList<>();
     private List<String> pendingStudentIds = new ArrayList<>();
     private List<String> removedStudentIds = new ArrayList<>();
+    private List<Map<String, Object>> memberLogs = new ArrayList<>();
     
     private LocalDateTime createdAt;
     
@@ -56,6 +58,9 @@ public class Classroom {
     
     public List<String> getRemovedStudentIds() { return removedStudentIds; }
     public void setRemovedStudentIds(List<String> removedStudentIds) { this.removedStudentIds = removedStudentIds; }
+
+    public List<Map<String, Object>> getMemberLogs() { return memberLogs; }
+    public void setMemberLogs(List<Map<String, Object>> memberLogs) { this.memberLogs = memberLogs; }
     
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

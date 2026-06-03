@@ -8,6 +8,7 @@ import com.auracademic.backend.repository.ExamRepository;
 import com.auracademic.backend.repository.ExamResultRepository;
 import com.auracademic.backend.repository.MaterialRepository;
 import com.auracademic.backend.repository.UserRepository;
+import com.auracademic.backend.service.NotificationService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -37,7 +38,26 @@ public class ClassroomController {
     private MaterialRepository materialRepository;
 
     @Autowired
+    private NotificationService notificationService;
+
+    @Autowired
     private com.auracademic.backend.repository.ClassroomPostRepository classroomPostRepository;
+
+    private void addMemberLog(Classroom classroom, String action, User student, User actor) {
+        if (classroom.getMemberLogs() == null) {
+            classroom.setMemberLogs(new ArrayList<>());
+        }
+
+        Map<String, Object> log = new HashMap<>();
+        log.put("action", action);
+        log.put("studentId", student.getId());
+        log.put("studentName", student.getFullName() != null ? student.getFullName() : student.getEmail());
+        log.put("studentEmail", student.getEmail());
+        log.put("actorId", actor != null ? actor.getId() : null);
+        log.put("actorName", actor != null ? (actor.getFullName() != null ? actor.getFullName() : actor.getEmail()) : "Hệ thống");
+        log.put("createdAt", LocalDateTime.now());
+        classroom.getMemberLogs().add(0, log);
+    }
 
     // 1. Tạo lớp học mới (Teacher)
     @PostMapping
@@ -122,6 +142,9 @@ public class ClassroomController {
 
         Map<String, Object> response = new HashMap<>();
         response.put("classroom", classroom);
+        userRepository.findById(classroom.getTeacherId()).ifPresent(teacher -> {
+            response.put("teacherAvatarUrl", teacher.getAvatarUrl());
+        });
         List<Exam> classroomExams = examRepository.findByClassroomId(id);
         for (Exam exam : classroomExams) {
             if (exam.getAccessCode() != null) {
@@ -140,6 +163,7 @@ public class ClassroomController {
                     sInfo.put("id", u.getId());
                     sInfo.put("fullName", u.getFullName() != null ? u.getFullName() : u.getEmail());
                     sInfo.put("email", u.getEmail());
+                    sInfo.put("avatarUrl", u.getAvatarUrl());
                     studentDetails.add(sInfo);
                 });
             }
@@ -155,6 +179,7 @@ public class ClassroomController {
                     sInfo.put("id", u.getId());
                     sInfo.put("fullName", u.getFullName() != null ? u.getFullName() : u.getEmail());
                     sInfo.put("email", u.getEmail());
+                    sInfo.put("avatarUrl", u.getAvatarUrl());
                     pendingDetails.add(sInfo);
                 });
             }
@@ -170,6 +195,7 @@ public class ClassroomController {
                     sInfo.put("id", u.getId());
                     sInfo.put("fullName", u.getFullName() != null ? u.getFullName() : u.getEmail());
                     sInfo.put("email", u.getEmail());
+                    sInfo.put("avatarUrl", u.getAvatarUrl());
                     removedDetails.add(sInfo);
                 });
             }
@@ -234,7 +260,17 @@ public class ClassroomController {
         // Tự động thêm vào danh sách chính thức
         classroom.getStudentIds().add(student.getId());
         classroom.getPendingStudentIds().remove(student.getId());
+        if (classroom.getRemovedStudentIds() != null) {
+            classroom.getRemovedStudentIds().remove(student.getId());
+        }
+        addMemberLog(classroom, "ADDED", student, teacher);
         classroomRepository.save(classroom);
+        notificationService.createAndSend(
+                student.getId(),
+                "Bạn đã được thêm vào lớp học",
+                "Giáo viên đã thêm bạn vào lớp \"" + classroom.getName() + "\".",
+                "INFO"
+        );
         return ResponseEntity.ok(Map.of("message", "Thêm học sinh thành công."));
     }
 
@@ -249,11 +285,24 @@ public class ClassroomController {
         if (!classroom.getTeacherId().equals(teacher.getId())) return ResponseEntity.status(403).body("Unauthorized");
 
         if (classroom.getPendingStudentIds().remove(studentId)) {
+            User student = userRepository.findById(studentId).orElse(null);
 
             if (!classroom.getStudentIds().contains(studentId)) {
                 classroom.getStudentIds().add(studentId);
             }
+            if (classroom.getRemovedStudentIds() != null) {
+                classroom.getRemovedStudentIds().remove(studentId);
+            }
+            if (student != null) {
+                addMemberLog(classroom, "ADDED", student, teacher);
+            }
             classroomRepository.save(classroom);
+            notificationService.createAndSend(
+                    studentId,
+                    "Yêu cầu tham gia lớp đã được chấp thuận",
+                    "Bạn đã được duyệt vào lớp \"" + classroom.getName() + "\".",
+                    "INFO"
+            );
             return ResponseEntity.ok(Map.of("message", "Đã phê duyệt học sinh."));
         }
         return ResponseEntity.badRequest().body("Học sinh không nằm trong danh sách chờ.");
@@ -287,13 +336,23 @@ public class ClassroomController {
         if (!classroom.getTeacherId().equals(teacher.getId())) return ResponseEntity.status(403).body("Unauthorized");
 
         if (classroom.getStudentIds().remove(studentId)) {
+            User student = userRepository.findById(studentId).orElse(null);
             if (classroom.getRemovedStudentIds() == null) {
                 classroom.setRemovedStudentIds(new ArrayList<>());
             }
             if (!classroom.getRemovedStudentIds().contains(studentId)) {
                 classroom.getRemovedStudentIds().add(studentId);
             }
+            if (student != null) {
+                addMemberLog(classroom, "REMOVED", student, teacher);
+            }
             classroomRepository.save(classroom);
+            notificationService.createAndSend(
+                    studentId,
+                    "Bạn đã bị xoá khỏi lớp học",
+                    "Bạn đã được mời ra khỏi lớp \"" + classroom.getName() + "\".",
+                    "WARNING"
+            );
             return ResponseEntity.ok(Map.of("message", "Đã xóa học sinh khỏi lớp."));
         }
         return ResponseEntity.badRequest().body("Học sinh không có trong lớp.");

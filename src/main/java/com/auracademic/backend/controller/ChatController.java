@@ -100,6 +100,9 @@ public class ChatController {
     @Autowired
     private com.auracademic.backend.repository.ClassroomMessageRepository classroomMessageRepository;
 
+    @Autowired
+    private com.auracademic.backend.repository.UserRepository userRepository;
+
     /**
      * Xử lý WebSocket group chat của Lớp học
      */
@@ -107,6 +110,12 @@ public class ChatController {
     public void handleClassroomMessage(com.auracademic.backend.model.ClassroomMessage msg) {
         if (msg.getClassroomId() == null) return;
         msg.setTimestamp(LocalDateTime.now());
+        if (msg.getSenderId() != null) {
+            userRepository.findById(msg.getSenderId()).ifPresent(user -> {
+                msg.setSenderAvatarUrl(null);
+                msg.setSenderName(user.getFullName() != null ? user.getFullName() : user.getEmail());
+            });
+        }
         com.auracademic.backend.model.ClassroomMessage saved = classroomMessageRepository.save(msg);
         messagingTemplate.convertAndSend("/topic/classroom/" + msg.getClassroomId(), saved);
     }
