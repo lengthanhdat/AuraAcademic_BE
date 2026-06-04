@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.JavaMailSenderImpl;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -36,6 +38,18 @@ public class AdminController {
 
     @Autowired
     private NotificationRepository notificationRepository;
+
+    @Autowired(required = false)
+    private JavaMailSender mailSender;
+
+    @org.springframework.beans.factory.annotation.Value("${spring.mail.username:}")
+    private String smtpUsername;
+
+    @org.springframework.beans.factory.annotation.Value("${spring.mail.host:}")
+    private String smtpHost;
+
+    @org.springframework.beans.factory.annotation.Value("${app.google.client-id:}")
+    private String googleClientId;
 
     // ─── Stats ───────────────────────────────────────────────────────────────
 
@@ -153,11 +167,15 @@ public class AdminController {
 
     /** DELETE /api/admin/users/{id} */
     @DeleteMapping("/users/{id}")
-    public ResponseEntity<?> deleteUser(@PathVariable String id) {
+    public ResponseEntity<?> deleteUser(@PathVariable String id, java.security.Principal principal) {
         try {
-            if (!userRepository.existsById(id)) return ResponseEntity.notFound().build();
-            userRepository.deleteById(id);
-            return ResponseEntity.ok(Map.of("message", "Đã xoá tài khoản"));
+            return userRepository.findById(id).map(user -> {
+                if (principal != null && user.getEmail().equals(principal.getName())) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "Bạn không thể tự xoá tài khoản của chính mình."));
+                }
+                userRepository.deleteById(id);
+                return ResponseEntity.ok(Map.of("message", "Đã xoá tài khoản"));
+            }).orElse(ResponseEntity.notFound().build());
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -284,6 +302,41 @@ public class AdminController {
     public ResponseEntity<?> updateSettings(@RequestBody Map<String, Object> settings) {
         settingService.updateSettings(settings);
         return ResponseEntity.ok(Map.of("message", "Đã lưu cấu hình hệ thống"));
+    }
+
+    @GetMapping("/settings/health")
+    public ResponseEntity<?> getSettingsHealth() {
+        Map<String, Object> result = new HashMap<>();
+        
+        // 1. Check SMTP
+        boolean smtpConfigured = smtpHost != null && !smtpHost.isBlank() && smtpUsername != null && !smtpUsername.isBlank();
+        result.put("smtpConfigured", smtpConfigured);
+        result.put("smtpHost", smtpHost);
+        result.put("smtpUsername", smtpConfigured && smtpUsername.contains("@") 
+            ? smtpUsername.replaceAll("(?<=.{2}).(?=[^@]*?@)", "*") 
+            : smtpUsername);
+            
+        boolean smtpConnected = false;
+        String smtpError = null;
+        if (smtpConfigured && mailSender instanceof JavaMailSenderImpl) {
+            try {
+                ((JavaMailSenderImpl) mailSender).testConnection();
+                smtpConnected = true;
+            } catch (Exception e) {
+                smtpError = e.getMessage();
+            }
+        }
+        result.put("smtpConnected", smtpConnected);
+        result.put("smtpError", smtpError);
+
+        // 2. Check Google Client ID
+        boolean googleConfigured = googleClientId != null && !googleClientId.isBlank();
+        result.put("googleConfigured", googleConfigured);
+        result.put("googleClientId", googleConfigured && googleClientId.length() > 10 
+            ? googleClientId.substring(0, 10) + "..." 
+            : googleClientId);
+
+        return ResponseEntity.ok(result);
     }
 
     @Autowired

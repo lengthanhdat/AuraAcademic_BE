@@ -89,11 +89,7 @@ public class AuthService {
                 passwordEncoder.encode(request.getPassword()), request.getRole());
 
         user.setEmailVerified(false);
-        String verificationToken = String.format("%06d", new java.util.Random().nextInt(1000000));
-        user.setEmailVerificationToken(verificationToken);
-        user.setEmailVerificationExpiry(LocalDateTime.now().plusMinutes(emailVerificationTtl));
         userRepository.save(user);
-        emailService.sendVerificationEmail(user.getEmail(), user.getFullName(), verificationToken);
 
         auditLogService.log(user.getId(), user.getEmail(), "REGISTER", ipAddress, null, true, null);
         log.info("Người dùng mới đã đăng ký: {}", user.getEmail());
@@ -289,9 +285,6 @@ public class AuthService {
         if (settingService.getBoolean(SettingService.MAINTENANCE_MODE, false)
                 && !"admin".equalsIgnoreCase(user.getRole())) {
             throw new AuthException("Hệ thống đang bảo trì, vui lòng quay lại sau.");
-        }
-        if (!user.isEmailVerified()) {
-            throw new AuthException("Tài khoản chưa được xác thực email. Vui lòng kiểm tra hộp thư của bạn.");
         }
     }
 

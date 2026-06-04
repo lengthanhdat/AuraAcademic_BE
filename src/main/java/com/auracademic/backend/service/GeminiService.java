@@ -405,8 +405,8 @@ public class GeminiService {
             default       -> "Mức trung bình (Thông hiểu & Vận dụng). Hỗn hợp câu dễ và khó vừa.";
         };
         String langInstruction = "en".equalsIgnoreCase(language)
-            ? "QUAN TRỌNG: Write ALL questions and answer choices in English."
-            : "QUAN TRỌNG: Viết TẤT CẢ câu hỏi và đáp án bằng Tiếng Việt.";
+            ? "NGÔN NGỮ: Nếu yêu cầu đề tài nêu rõ một ngôn ngữ/môn ngoại ngữ cụ thể thì GIỮ ĐÚNG ngôn ngữ đó. Nếu không nêu rõ, write all questions and answer choices in English."
+            : "NGÔN NGỮ: Nếu yêu cầu đề tài nêu rõ một ngôn ngữ/môn ngoại ngữ cụ thể (ví dụ English, IELTS, TOEIC, Tiếng Anh) thì GIỮ ĐÚNG ngôn ngữ đó và TUYỆT ĐỐI KHÔNG dịch sang Tiếng Việt. Chỉ viết bằng Tiếng Việt khi yêu cầu đề tài không chỉ định ngôn ngữ khác.";
 
         return """
             # VAI TRÒ

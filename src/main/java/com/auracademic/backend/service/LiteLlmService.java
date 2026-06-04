@@ -175,8 +175,15 @@ public class LiteLlmService {
             %s
 
             # TIÊU CHÍ KIỂM DUYỆT
-            Từ chối ngay nếu có: ngôn tục (mọi ngôn ngữ), nội dung tình dục, bạo lực, kỳ thị, chính trị nhạy cảm, vi phạm bản quyền.
-            Chấp nhận: từ y khoa học thuật, phân tích văn học, nội dung giáo dục bình thường.
+            Chỉ từ chối khi có bằng chứng rõ ràng, trực tiếp về một trong các nhóm sau:
+            - Ngôn tục/chửi bậy không phục vụ mục đích học thuật.
+            - Nội dung tình dục/khiêu dâm/NSFW.
+            - Kêu gọi bạo lực, hướng dẫn gây hại, kỳ thị/thù ghét.
+            - Tuyên truyền/chính trị nhạy cảm cực đoan.
+            - Vi phạm bản quyền rõ ràng: chia sẻ nguyên văn tài liệu thương mại có ghi bản quyền, sách trả phí, khóa học trả phí, hoặc có dấu hiệu phân phối trái phép.
+
+            Không từ chối chỉ vì tài liệu là bài giảng, đề cương, slide học tập, bài tập, tài liệu tự soạn, trích dẫn ngắn, nội dung y khoa/sinh học/giáo dục giới tính theo ngữ cảnh học thuật, hoặc có cụm từ nhạy cảm nhưng đang được phân tích trong bối cảnh học thuật.
+            Nếu không chắc chắn, hãy đặt approved=true và giải thích cần admin xem thêm trong reason.
 
             # FORMAT TRẢ VỀ (JSON ONLY):
             {"approved":true,"reason":"Lý do tiếng Việt","violationType":"NONE","suggestedTags":["tag1","tag2"]}
@@ -475,8 +482,8 @@ public class LiteLlmService {
             default       -> "Mức trung bình (Thông hiểu & Vận dụng). Hỗn hợp dễ và khó vừa.";
         };
         String langInstruction = "en".equalsIgnoreCase(language)
-            ? "IMPORTANT: Write ALL questions and answers in English."
-            : "QUAN TRỌNG: Viết TẤT CẢ câu hỏi và đáp án bằng Tiếng Việt.";
+            ? "NGÔN NGỮ: Nếu yêu cầu đề tài nêu rõ một ngôn ngữ/môn ngoại ngữ cụ thể thì GIỮ ĐÚNG ngôn ngữ đó. Nếu không nêu rõ, viết câu hỏi và đáp án bằng English."
+            : "NGÔN NGỮ: Nếu yêu cầu đề tài nêu rõ một ngôn ngữ/môn ngoại ngữ cụ thể (ví dụ English, IELTS, TOEIC, Tiếng Anh) thì GIỮ ĐÚNG ngôn ngữ đó và TUYỆT ĐỐI KHÔNG dịch sang Tiếng Việt. Chỉ viết bằng Tiếng Việt khi yêu cầu đề tài không chỉ định ngôn ngữ khác.";
 
         return """
             # VAI TRÒ

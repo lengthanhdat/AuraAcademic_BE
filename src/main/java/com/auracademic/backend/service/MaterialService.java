@@ -134,8 +134,8 @@ public class MaterialService {
                 String reason = (String) aiResult.getOrDefault("reason", "");
                 String violationType = (String) aiResult.getOrDefault("violationType", "NONE");
 
-                if (!approved) {
-                    // AI từ chối → ném lỗi ngay, file KHÔNG được lưu
+                if (!approved && isHardModerationBlock(violationType)) {
+                    // Chỉ chặn cứng các nhóm an toàn nội dung rõ ràng. Các kết quả mơ hồ/COPYRIGHT để Admin duyệt.
                     log.warn("[AI-Gate] Từ chối tài liệu '{}' | vi phạm: {} | lý do: {}", title, violationType, reason);
                     auditLogService.log(userId, user.getEmail(), "MATERIAL_AI_BLOCKED", ip,
                             null, false,
@@ -143,15 +143,24 @@ public class MaterialService {
                     throw new AuthException("Tài liệu bị từ chối bởi AI kiểm duyệt: " + reason);
                 }
 
-                // AI duyệt → publish ngay, gộp tags gợi ý
-                initialStatus = "published";
-                List<String> suggestedTags = (List<String>) aiResult.getOrDefault("suggestedTags", List.of());
-                if (!suggestedTags.isEmpty()) {
-                    java.util.Set<String> merged = new java.util.LinkedHashSet<>(tags);
-                    merged.addAll(suggestedTags);
-                    finalTags = new java.util.ArrayList<>(merged);
+                if (!approved) {
+                    log.warn("[AI-Gate] AI chưa chắc chắn về tài liệu '{}' | vi phạm: {} | lý do: {} — chuyển Admin duyệt.",
+                            title, violationType, reason);
+                    auditLogService.log(userId, user.getEmail(), "MATERIAL_AI_PENDING_REVIEW", ip,
+                            null, true,
+                            "PENDING_REVIEW[" + violationType + "]: " + title + " — " + reason);
+                    initialStatus = "pending_review";
+                } else {
+                    // AI duyệt → publish ngay, gộp tags gợi ý
+                    initialStatus = "published";
+                    List<String> suggestedTags = (List<String>) aiResult.getOrDefault("suggestedTags", List.of());
+                    if (!suggestedTags.isEmpty()) {
+                        java.util.Set<String> merged = new java.util.LinkedHashSet<>(tags);
+                        merged.addAll(suggestedTags);
+                        finalTags = new java.util.ArrayList<>(merged);
+                    }
+                    log.info("[AI-Gate] Duyệt tài liệu '{}': {}", title, reason);
                 }
-                log.info("[AI-Gate] Duyệt tài liệu '{}': {}", title, reason);
 
             } catch (AuthException e) {
                 throw e; // Re-throw rejection, không nuốt lỗi này
@@ -187,6 +196,14 @@ public class MaterialService {
         return m;
     }
 
+    private boolean isHardModerationBlock(String violationType) {
+        if (violationType == null) return false;
+        return switch (violationType.trim().toUpperCase()) {
+            case "PROFANITY", "SEXUAL_CONTENT", "VIOLENCE", "HATE_SPEECH", "POLITICAL" -> true;
+            default -> false;
+        };
+    }
+
     /** Update metadata (title, desc, tags, subject, category) */
     @SuppressWarnings("unchecked")
     public Material update(String materialId, String userId, String role, Map<String, Object> req, String ip) {
@@ -208,9 +225,6 @@ public class MaterialService {
         if (req.containsKey("tags"))
             m.setTags((List<String>) req.get("tags"));
         m.setUpdatedAt(LocalDateTime.now());
-        // Reset to pending_review when teacher edits
-        if ("teacher".equals(role))
-            m.setStatus("pending_review");
 
         materialRepository.save(m);
         var user = userRepository.findById(userId).orElse(null);
