@@ -45,7 +45,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             try {
                 String userId = jwtTokenProvider.extractUserId(token);
                 User user = userRepository.findById(userId).orElse(null);
-                if (user != null && !user.isAccountLocked()) {
+                if (user != null && user.isAccountLocked()) {
+                    writeJson(response, HttpServletResponse.SC_FORBIDDEN,
+                            "{\"error\":\"ACCOUNT_LOCKED\",\"message\":\"Tài khoản đã bị khóa. Vui lòng liên hệ quản trị viên.\"}");
+                    return;
+                }
+                if (user != null) {
                     if (settingService.getBoolean(SettingService.PREVENT_CONCURRENT_LOGIN, false)
                             && !isCurrentSessionToken(userId, token)) {
                         writeJson(response, HttpServletResponse.SC_UNAUTHORIZED,

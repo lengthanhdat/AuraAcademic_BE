@@ -29,6 +29,7 @@ public class UserMapper {
         res.setCertificates(user.getCertificates());
         res.setExperience(user.getExperience());
         res.setProvider(user.getProvider());
+        res.setHasPassword(user.getPassword() != null && !user.getPassword().isBlank());
         res.setEmailVerified(user.isEmailVerified());
         res.setTwoFactorEnabled(user.isTwoFactorEnabled());
         res.setCreatedAt(user.getCreatedAt());

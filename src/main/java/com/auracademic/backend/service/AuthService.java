@@ -38,6 +38,7 @@ public class AuthService {
     private final AuditLogService auditLogService;
     private final UserMapper userMapper;
     private final SettingService settingService;
+    private final NotificationService notificationService;
 
     public AuthService(UserRepository userRepository,
                        RefreshTokenRepository refreshTokenRepository,
@@ -47,7 +48,8 @@ public class AuthService {
                        TwoFactorService twoFactorService,
                        AuditLogService auditLogService,
                        UserMapper userMapper,
-                       SettingService settingService) {
+                       SettingService settingService,
+                       NotificationService notificationService) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.jwtTokenProvider = jwtTokenProvider;
@@ -57,6 +59,7 @@ public class AuthService {
         this.auditLogService = auditLogService;
         this.userMapper = userMapper;
         this.settingService = settingService;
+        this.notificationService = notificationService;
     }
 
     @Value("${app.google.client-id}")
@@ -91,6 +94,7 @@ public class AuthService {
         user.setEmailVerified(false);
         userRepository.save(user);
 
+        sendWelcomeNotification(user);
         auditLogService.log(user.getId(), user.getEmail(), "REGISTER", ipAddress, null, true, null);
         log.info("Người dùng mới đã đăng ký: {}", user.getEmail());
     }
@@ -157,6 +161,7 @@ public class AuthService {
 
         User user = userRepository.findById(refreshToken.getUserId())
                 .orElseThrow(() -> new AuthException("Không tìm thấy người dùng"));
+        checkAccountLock(user);
         checkAccessAllowedBySettings(user);
 
         refreshTokenRepository.delete(refreshToken);
@@ -253,6 +258,7 @@ public class AuthService {
             String name = (String) payload.get("name");
             String pictureUrl = (String) payload.get("picture");
 
+            boolean[] createdNewUser = {false};
             User user = userRepository.findByProviderAndProviderId("google", googleId)
                     .orElseGet(() -> userRepository.findByEmail(email)
                             .map(existingUser -> {
@@ -261,9 +267,16 @@ public class AuthService {
                                 existingUser.setEmailVerified(true);
                                 return userRepository.save(existingUser);
                             })
-                            .orElseGet(() -> userRepository.save(
-                                    buildOAuth2User(name, email, "google", googleId, pictureUrl))));
+                            .orElseGet(() -> {
+                                createdNewUser[0] = true;
+                                return userRepository.save(buildOAuth2User(name, email, "google", googleId, pictureUrl));
+                            }));
 
+            if (createdNewUser[0]) {
+                sendWelcomeNotification(user);
+            }
+
+            checkAccountLock(user);
             checkAccessAllowedBySettings(user);
             notifySuspiciousLoginIfNeeded(user, ipAddress, userAgent);
 
@@ -288,6 +301,22 @@ public class AuthService {
         }
     }
 
+    private void sendWelcomeNotification(User user) {
+        try {
+            String displayName = user.getFullName() != null && !user.getFullName().isBlank()
+                    ? user.getFullName()
+                    : user.getEmail();
+            notificationService.createAndSend(
+                    user.getId(),
+                    "Chào mừng đến với AuraAcademic",
+                    "Xin chào " + displayName + ", tài khoản của bạn đã sẵn sàng. Hãy cập nhật hồ sơ và bắt đầu sử dụng hệ thống học tập.",
+                    "WELCOME"
+            );
+        } catch (Exception e) {
+            log.warn("Không thể tạo thông báo chào mừng cho {}: {}", user.getEmail(), e.getMessage());
+        }
+    }
+
     private void checkAccountLock(User user) {
         if ("admin".equalsIgnoreCase(user.getRole())) return;
 
@@ -298,7 +327,10 @@ public class AuthService {
                 user.setLockExpiry(null);
                 userRepository.save(user);
             } else {
-                throw new AuthException("Tài khoản tạm thời bị khóa do đăng nhập sai quá nhiều lần. Vui lòng thử lại sau.");
+                String message = user.getLockExpiry() == null
+                        ? "Tài khoản đã bị khóa. Vui lòng liên hệ quản trị viên."
+                        : "Tài khoản tạm thời bị khóa do đăng nhập sai quá nhiều lần. Vui lòng thử lại sau.";
+                throw new AuthException(message);
             }
         }
     }

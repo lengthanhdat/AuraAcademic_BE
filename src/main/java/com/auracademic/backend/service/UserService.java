@@ -86,8 +86,14 @@ public class UserService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new AuthException("Khong tim thay nguoi dung"));
 
-        if (!passwordEncoder.matches(request.getCurrentPassword(), user.getPassword())) {
-            throw new AuthException("Mat khau hien tai khong dung");
+        boolean hasExistingPassword = user.getPassword() != null && !user.getPassword().isBlank();
+        if (hasExistingPassword) {
+            if (request.getCurrentPassword() == null || request.getCurrentPassword().isBlank()) {
+                throw new AuthException("Vui lòng nhập mật khẩu hiện tại");
+            }
+            if (!passwordEncoder.matches(request.getCurrentPassword(), user.getPassword())) {
+                throw new AuthException("Mật khẩu hiện tại không đúng");
+            }
         }
 
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));

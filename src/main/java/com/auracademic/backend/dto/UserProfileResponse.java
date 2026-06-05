@@ -21,6 +21,7 @@ public class UserProfileResponse {
     private String certificates;
     private String experience;
     private String provider;
+    private boolean hasPassword;
     private boolean emailVerified;
     private boolean twoFactorEnabled;
     private LocalDateTime createdAt;
@@ -153,6 +154,14 @@ public class UserProfileResponse {
 
     public void setProvider(String provider) {
         this.provider = provider;
+    }
+
+    public boolean isHasPassword() {
+        return hasPassword;
+    }
+
+    public void setHasPassword(boolean hasPassword) {
+        this.hasPassword = hasPassword;
     }
 
     public boolean isEmailVerified() {

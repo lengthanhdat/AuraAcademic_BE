@@ -156,7 +156,16 @@ public class AdminController {
                 String r = (String) body.get("role");
                 if (List.of("student","teacher","admin").contains(r)) user.setRole(r);
             }
-            if (body.containsKey("accountLocked")) user.setAccountLocked((Boolean) body.get("accountLocked"));
+            if (body.containsKey("accountLocked")) {
+                boolean locked = (Boolean) body.get("accountLocked");
+                user.setAccountLocked(locked);
+                if (locked) {
+                    user.setLockExpiry(null);
+                } else {
+                    user.setFailedLoginAttempts(0);
+                    user.setLockExpiry(null);
+                }
+            }
             if (body.containsKey("emailVerified")) user.setEmailVerified((Boolean) body.get("emailVerified"));
             user.setUpdatedAt(LocalDateTime.now());
             User saved = userRepository.save(user);
@@ -209,7 +218,8 @@ public class AdminController {
                 return ResponseEntity.badRequest().body(Map.of("error", "Bạn không thể tự khoá tài khoản của chính mình."));
             }
             user.setAccountLocked(lock);
-            if (!lock) { user.setFailedLoginAttempts(0); user.setLockExpiry(null); }
+            user.setLockExpiry(null);
+            if (!lock) { user.setFailedLoginAttempts(0); }
             user.setUpdatedAt(LocalDateTime.now());
             userRepository.save(user);
             return ResponseEntity.ok(Map.of("message", lock ? "Đã khoá tài khoản" : "Đã mở khoá"));
