@@ -31,7 +31,7 @@ public class EmailService {
     private String fromEmail;
 
     @Value("${app.frontend.url}")
-    private String frontendUrl;
+    private List<String> frontendUrls;
 
     @Async
     public void sendVerificationEmail(String toEmail, String fullName, String token) {
@@ -53,7 +53,8 @@ public class EmailService {
         try {
             Context ctx = new Context();
             ctx.setVariable("name", fullName);
-            ctx.setVariable("resetUrl", frontendUrl + "/reset-password?token=" + token);
+            String targetUrl = frontendUrls.isEmpty() ? "" : frontendUrls.get(frontendUrls.size() - 1);
+            ctx.setVariable("resetUrl", targetUrl + "/reset-password?token=" + token);
             ctx.setVariable("appName", "AuraAcademic");
 
             String html = templateEngine.process("password-reset", ctx);
