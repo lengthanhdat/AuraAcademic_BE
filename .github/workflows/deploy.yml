@@ -9,7 +9,7 @@ env:
   AWS_REGION: ap-southeast-1
   ECR_REPOSITORY: aura-academic-be
   ECS_CLUSTER: aura-academic-cluster
-  ECS_SERVICE: aura-academic-be-service
+  ECS_SERVICE: aura-academic-backend-enterprise
   CONTAINER_NAME: backend-container
 
 jobs:
