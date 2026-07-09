@@ -77,8 +77,8 @@ jobs:
             APP_CORS_ALLOWED_ORIGINS=${{ secrets.CORS_ORIGINS }}
             LITELLM_PROXY_URL=https://generativelanguage.googleapis.com/v1beta/openai
             LITELLM_PROXY_KEY=${{ secrets.GEMINI_API_KEY }}
-            LITELLM_MODEL_MAIN=gemini-2.5-flash
-            LITELLM_MODEL_VISION=gemini-2.5-flash
+            LITELLM_MODEL_MAIN=gemini-1.5-flash
+            LITELLM_MODEL_VISION=gemini-1.5-flash
 
       # ── 7. Deploy lên ECS, chờ healthy ───────────────────
       - name: Deploy to ECS
