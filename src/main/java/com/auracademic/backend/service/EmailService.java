@@ -1,3 +1,4 @@
+
 package com.auracademic.backend.service;
 
 import jakarta.mail.MessagingException;
@@ -66,7 +67,8 @@ public class EmailService {
     }
 
     @Async
-    public void sendSecurityAlertEmail(String toEmail, String fullName, String ipAddress, String userAgent, LocalDateTime loginTime) {
+    public void sendSecurityAlertEmail(String toEmail, String fullName, String ipAddress, String userAgent,
+            LocalDateTime loginTime) {
         try {
             String formattedTime = loginTime != null
                     ? loginTime.format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss"))
@@ -100,7 +102,8 @@ public class EmailService {
         }
     }
 
-    private void sendHtml(String to, String subject, String htmlContent) throws MessagingException, java.io.UnsupportedEncodingException {
+    private void sendHtml(String to, String subject, String htmlContent)
+            throws MessagingException, java.io.UnsupportedEncodingException {
         MimeMessage message = mailSender.createMimeMessage();
         MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
         helper.setFrom(fromEmail, "AuraAcademic");
@@ -110,6 +113,5 @@ public class EmailService {
         mailSender.send(message);
         log.info("Email đã gửi thành công tới: {}", to);
     }
-
 
 }
