@@ -38,6 +38,7 @@ target/
 .idea/
 *.iml
 *.log
+application-secrets.properties
 
 # Python (AI Service)
 venv/
@@ -52,3 +53,19 @@ logs/
 .idea/
 *.swp
 *.swo
+
+# AG Kit & Code Review Graph (AI expansion)
+.code-review-graph/
+.agent/logs/
+.agent/memory/
+*.task.md
+
+# Local Spring Boot Configuration & Output logs
+**/application-*.properties
+!**/application-dev.properties
+application.log
+*.log
+/bin/
+/out/
+
+

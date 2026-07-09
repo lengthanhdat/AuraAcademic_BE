@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="vi">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Cảnh báo bảo mật AuraAcademic</title>
+</head>
+<body style="margin:0;padding:0;background-color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#333333;">
+
+<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color:#ffffff;padding:40px 20px;">
+    <tr>
+        <td align="center">
+            <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="max-width:520px;background-color:#ffffff;border:1px solid #eaeaea;border-radius:6px;overflow:hidden;">
+
+                <!-- Header -->
+                <tr>
+                    <td style="background-color:#ffffff;border-bottom:1px solid #eaeaea;padding:24px 32px;">
+                        <table width="100%" cellpadding="0" cellspacing="0">
+                            <tr>
+                                <td>
+                                    <p style="margin:0;font-size:20px;font-weight:700;color:#000000;letter-spacing:-0.5px;" th:text="${appName}">AuraAcademic</p>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+
+                <!-- Body -->
+                <tr>
+                    <td style="padding:32px;">
+
+                        <!-- Greeting -->
+                        <p style="margin:0 0 16px;font-size:16px;font-weight:600;color:#000000;">
+                            Xin chào, <span th:text="${name}">Người dùng</span>!
+                        </p>
+
+                        <!-- Description -->
+                        <p style="margin:0 0 20px;font-size:14px;line-height:1.6;color:#555555;">
+                            Hệ thống phát hiện một đăng nhập mới vào tài khoản của bạn. Dưới đây là thông tin chi tiết về hoạt động này.
+                        </p>
+
+                        <!-- Alert Banner -->
+                        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
+                            <tr>
+                                <td style="background-color:#fff0f0;border:1px solid #ffdddd;border-radius:6px;padding:12px 16px;">
+                                    <p style="margin:0;font-size:13px;font-weight:600;color:#cc0000;line-height:1.6;">
+                                        &#9888; Đăng nhập mới được phát hiện trên tài khoản của bạn!
+                                    </p>
+                                </td>
+                            </tr>
+                        </table>
+
+                        <!-- Info Table -->
+                        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;border:1px solid #eaeaea;border-radius:6px;overflow:hidden;">
+                            <tr>
+                                <td style="background-color:#fafafa;padding:10px 16px;border-bottom:1px solid #eaeaea;width:40%;">
+                                    <p style="margin:0;font-size:12px;font-weight:600;color:#666666;text-transform:uppercase;letter-spacing:0.06em;">Thông tin</p>
+                                </td>
+                                <td style="background-color:#fafafa;padding:10px 16px;border-bottom:1px solid #eaeaea;">
+                                    <p style="margin:0;font-size:12px;font-weight:600;color:#666666;text-transform:uppercase;letter-spacing:0.06em;">Chi tiết</p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding:12px 16px;border-bottom:1px solid #eaeaea;">
+                                    <p style="margin:0;font-size:13px;color:#666666;font-weight:500;">Địa chỉ IP</p>
+                                </td>
+                                <td style="padding:12px 16px;border-bottom:1px solid #eaeaea;">
+                                    <p style="margin:0;font-size:13px;color:#000000;font-weight:600;" th:text="${ip}">192.168.1.1</p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding:12px 16px;border-bottom:1px solid #eaeaea;">
+                                    <p style="margin:0;font-size:13px;color:#666666;font-weight:500;">Thiết bị / Trình duyệt</p>
+                                </td>
+                                <td style="padding:12px 16px;border-bottom:1px solid #eaeaea;">
+                                    <p style="margin:0;font-size:13px;color:#000000;" th:text="${device}">Chrome / Windows 10</p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding:12px 16px;">
+                                    <p style="margin:0;font-size:13px;color:#666666;font-weight:500;">Thời gian đăng nhập</p>
+                                </td>
+                                <td style="padding:12px 16px;">
+                                    <p style="margin:0;font-size:13px;color:#000000;" th:text="${loginTime}">01/01/2026 08:00:00</p>
+                                </td>
+                            </tr>
+                        </table>
+
+                        <!-- Secure Note -->
+                        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+                            <tr>
+                                <td style="background-color:#fafafa;border:1px solid #eaeaea;border-radius:6px;padding:12px 16px;">
+                                    <p style="margin:0;font-size:13px;color:#666666;line-height:1.6;">
+                                        <strong>Bạn có thể làm gì?</strong><br/>
+                                        Nếu đây <strong>KHÔNG</strong> phải là bạn, vui lòng đổi mật khẩu ngay và liên hệ với đội ngũ hỗ trợ của chúng tôi.
+                                        Nếu đây là bạn, bạn có thể bỏ qua email này.
+                                    </p>
+                                </td>
+                            </tr>
+                        </table>
+
+                        <!-- Signature -->
+                        <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eaeaea;padding-top:24px;">
+                            <tr>
+                                <td>
+                                    <p style="margin:0;font-size:14px;color:#555555;line-height:1.6;">
+                                        Trân trọng,<br/>
+                                        <strong th:text="'Đội ngũ Bảo mật ' + ${appName}" style="color:#000000;">Đội ngũ Bảo mật AuraAcademic</strong>
+                                    </p>
+                                </td>
+                            </tr>
+                        </table>
+
+                    </td>
+                </tr>
+
+                <!-- Footer -->
+                <tr>
+                    <td style="background-color:#fafafa;border-top:1px solid #eaeaea;padding:24px 32px;text-align:center;">
+                        <table width="100%" cellpadding="0" cellspacing="0">
+                            <tr>
+                                <td>
+                                    <p style="margin:0;font-size:12px;color:#888888;line-height:1.6;">
+                                        Email tự động, vui lòng không phản hồi.<br/>
+                                        &copy; 2026 AuraAcademic.
+                                    </p>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+
+            </table>
+        </td>
+    </tr>
+</table>
+
+</body>
+</html>

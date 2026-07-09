@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="vi">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Xác thực tài khoản AuraAcademic</title>
+</head>
+<body style="margin:0;padding:0;background-color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#333333;">
+
+<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color:#ffffff;padding:40px 20px;">
+    <tr>
+        <td align="center">
+            <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="max-width:520px;background-color:#ffffff;border:1px solid #eaeaea;border-radius:6px;overflow:hidden;">
+
+                <!-- Header -->
+                <tr>
+                    <td style="background-color:#ffffff;border-bottom:1px solid #eaeaea;padding:24px 32px;">
+                        <table width="100%" cellpadding="0" cellspacing="0">
+                            <tr>
+                                <td>
+                                    <p style="margin:0;font-size:20px;font-weight:700;color:#000000;letter-spacing:-0.5px;" th:text="${appName}">AuraAcademic</p>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+
+                <!-- Body -->
+                <tr>
+                    <td style="padding:32px;">
+
+                        <!-- Greeting -->
+                        <p style="margin:0 0 16px;font-size:16px;font-weight:600;color:#000000;">
+                            Xin chào, <span th:text="${name}">Người dùng</span>!
+                        </p>
+
+                        <!-- Description -->
+                        <p style="margin:0 0 24px;font-size:14px;line-height:1.6;color:#555555;">
+                            Cảm ơn bạn đã đăng ký tài khoản trên hệ thống <strong th:text="${appName}" style="color:#000000;">AuraAcademic</strong>.
+                            Vui lòng sử dụng mã OTP dưới đây để hoàn tất xác thực.
+                        </p>
+
+                        <!-- OTP Box -->
+                        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+                            <tr>
+                                <td align="center">
+                                    <div style="display:inline-block;background-color:#fafafa;border:1px solid #eaeaea;border-radius:6px;padding:20px 48px;">
+                                        <span th:text="${otp}" style="font-size:32px;font-weight:600;letter-spacing:12px;color:#000000;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">123456</span>
+                                    </div>
+                                </td>
+                            </tr>
+                        </table>
+
+                        <!-- Info Note -->
+                        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+                            <tr>
+                                <td>
+                                    <p style="margin:0;font-size:13px;color:#666666;line-height:1.6;">
+                                        Mã xác thực này chỉ có hiệu lực trong vòng <strong>10 phút</strong>.
+                                        Nếu bạn không yêu cầu mã này, vui lòng bỏ qua email.
+                                    </p>
+                                </td>
+                            </tr>
+                        </table>
+
+                        <!-- Signature -->
+                        <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eaeaea;padding-top:24px;">
+                            <tr>
+                                <td>
+                                    <p style="margin:0;font-size:14px;color:#555555;line-height:1.6;">
+                                        Trân trọng,<br/>
+                                        <strong th:text="${appName}" style="color:#000000;">AuraAcademic</strong>
+                                    </p>
+                                </td>
+                            </tr>
+                        </table>
+
+                    </td>
+                </tr>
+
+                <!-- Footer -->
+                <tr>
+                    <td style="background-color:#fafafa;border-top:1px solid #eaeaea;padding:24px 32px;text-align:center;">
+                        <table width="100%" cellpadding="0" cellspacing="0">
+                            <tr>
+                                <td>
+                                    <p style="margin:0;font-size:12px;color:#888888;line-height:1.6;">
+                                        Email tự động, vui lòng không phản hồi.<br/>
+                                        &copy; 2026 AuraAcademic.
+                                    </p>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+
+            </table>
+        </td>
+    </tr>
+</table>
+
+</body>
+</html>

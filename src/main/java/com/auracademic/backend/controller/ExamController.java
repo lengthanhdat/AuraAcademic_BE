@@ -7,19 +7,26 @@ import com.auracademic.backend.repository.ExamRepository;
 import com.auracademic.backend.repository.ExamResultRepository;
 import com.auracademic.backend.service.ActiveParticipantService;
 import com.auracademic.backend.service.ExamEventService;
+import com.auracademic.backend.model.Classroom;
+import com.auracademic.backend.model.User;
+import com.auracademic.backend.repository.ClassroomRepository;
+import com.auracademic.backend.repository.UserRepository;
+import com.auracademic.backend.service.SettingService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/exams")
-@CrossOrigin(origins = "http://localhost:3000") // TODO: use configured CORS instead of hardcoding for production
+
 public class ExamController {
 
     @Autowired
@@ -33,6 +40,18 @@ public class ExamController {
 
     @Autowired
     private ExamEventService examEventService;
+
+    @Autowired
+    private SettingService settingService;
+
+    @Autowired
+    private ClassroomRepository classroomRepository;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private com.auracademic.backend.repository.ExamBankFolderRepository folderRepository;
 
     /**
      * SSE endpoint — client kết nối để nhận sự kiện theo thời gian thực
@@ -61,20 +80,60 @@ public class ExamController {
 
     @PostMapping("/{code}/heartbeat")
     public ResponseEntity<?> heartbeat(@PathVariable String code, @RequestBody Map<String, String> body) {
+        // Auto-start trigger
+        examRepository.findFirstByAccessCode(code.toUpperCase()).ifPresent(exam -> {
+            if ("PUBLISHED".equals(exam.getStatus()) && exam.getScheduledStartTime() != null && System.currentTimeMillis() >= exam.getScheduledStartTime()) {
+                exam.setStatus("STARTED");
+                exam.setStartTime(exam.getScheduledStartTime());
+                examRepository.save(exam);
+                examEventService.broadcast(exam.getAccessCode(), "status",
+                    Map.of("status", "STARTED", "startTime", exam.getStartTime()));
+            }
+        });
+
+        // Auto-finish trigger: tự động kết thúc bài thi khi hết giờ (phía server, không phụ thuộc vào client giáo viên)
+        examRepository.findFirstByAccessCode(code.toUpperCase()).ifPresent(exam -> {
+            if ("STARTED".equals(exam.getStatus()) && exam.getStartTime() != null && exam.getDuration() > 0) {
+                long endTime = exam.getStartTime() + (long) exam.getDuration() * 60 * 1000;
+                if (System.currentTimeMillis() > endTime) {
+                    exam.setStatus("COMPLETED");
+                    examRepository.save(exam);
+                    examEventService.broadcast(exam.getAccessCode(), "status",
+                        Map.of("status", "COMPLETED"));
+                }
+            }
+        });
+
         String studentId = body.get("studentId");
+        String status = body.getOrDefault("status", "LOBBY"); // "LOBBY" hoặc "EXAM"
         if (studentId != null && !studentId.isBlank()) {
-            activeParticipantService.heartbeat(code, studentId);
-            // Broadcast cập nhật số người chờ
-            long count = activeParticipantService.getActiveCount(code);
-            examEventService.broadcast(code, "count", Map.of("activeCount", count));
+            activeParticipantService.heartbeat(code, studentId, status);
+            // Broadcast cập nhật số người cho giáo viên
+            long lobbyCount = activeParticipantService.getLobbyCount(code);
+            long examCount  = activeParticipantService.getExamCount(code);
+            examEventService.broadcast(code, "count", Map.of(
+                "activeCount", lobbyCount + examCount,
+                "lobbyCount", lobbyCount,
+                "examCount",  examCount
+            ));
         }
-        return ResponseEntity.ok().build();
+        // Retrieve current exam status to return — phản ánh chính xác trạng thái mới nhất
+        String currentStatus = examRepository.findFirstByAccessCode(code.toUpperCase())
+            .map(Exam::getStatus)
+            .orElse("UNKNOWN");
+
+        return ResponseEntity.ok(Map.of("status", currentStatus));
     }
 
     @GetMapping("/{code}/active-count")
     public ResponseEntity<?> getActiveCount(@PathVariable String code) {
-        long count = activeParticipantService.getActiveCount(code);
-        return ResponseEntity.ok(Map.of("activeCount", count));
+        long lobby = activeParticipantService.getLobbyCount(code);
+        long exam  = activeParticipantService.getExamCount(code);
+        return ResponseEntity.ok(Map.of(
+            "activeCount", lobby + exam,
+            "lobbyCount",  lobby,
+            "examCount",   exam
+        ));
     }
 
     @PostMapping("/{code}/leave")
@@ -82,9 +141,13 @@ public class ExamController {
         String studentId = body.get("studentId");
         if (studentId != null && !studentId.isBlank()) {
             activeParticipantService.removeParticipant(code, studentId);
-            // Broadcast cập nhật số người chờ
-            long count = activeParticipantService.getActiveCount(code);
-            examEventService.broadcast(code, "count", Map.of("activeCount", count));
+            long lobbyCount = activeParticipantService.getLobbyCount(code);
+            long examCount  = activeParticipantService.getExamCount(code);
+            examEventService.broadcast(code, "count", Map.of(
+                "activeCount", lobbyCount + examCount,
+                "lobbyCount", lobbyCount,
+                "examCount",  examCount
+            ));
         }
         return ResponseEntity.ok().build();
     }
@@ -95,12 +158,17 @@ public class ExamController {
             if (exam.getStatus() == null) {
                 exam.setStatus("DRAFT");
             }
+            applyGlobalExamSettings(exam);
             // Chỉ set startTime khi status là STARTED (giáo viên bấm nút Bắt đầu)
             // WAITING = đã tạo phòng nhưng chưa bắt đầu
             // Tự động tạo mã phòng nếu chưa có
             if (exam.getAccessCode() == null || exam.getAccessCode().isEmpty()) {
                 exam.setAccessCode(java.util.UUID.randomUUID().toString().substring(0, 6).toUpperCase());
             }
+            if (exam.getCreatedAt() == null) {
+                exam.setCreatedAt(java.time.LocalDateTime.now());
+            }
+            autoCategorizeExamToFolder(exam);
             Exam savedExam = examRepository.save(exam);
             return ResponseEntity.ok(savedExam);
         } catch (Exception e) {
@@ -116,7 +184,7 @@ public class ExamController {
             for (ExamResult r : results) {
                 if (r.getExamTitle() == null || r.getExamTitle().isEmpty()) {
                     // Tìm theo accessCode (examId trong Result đang lưu accessCode)
-                    examRepository.findByAccessCode(r.getExamId())
+                    examRepository.findFirstByAccessCode(r.getExamId())
                         .ifPresent(ex -> r.setExamTitle(ex.getTitle()));
                 }
             }
@@ -131,12 +199,51 @@ public class ExamController {
      */
     @GetMapping("/lobby/{code}")
     public ResponseEntity<?> getLobbyInfo(@PathVariable String code) {
-        return examRepository.findByAccessCode(code.toUpperCase())
+        return examRepository.findFirstByAccessCode(code.toUpperCase())
                 .map(exam -> {
+                    // Auto-start logic
+                    if ("PUBLISHED".equals(exam.getStatus()) && exam.getScheduledStartTime() != null && System.currentTimeMillis() >= exam.getScheduledStartTime()) {
+                        exam.setStatus("STARTED");
+                        exam.setStartTime(exam.getScheduledStartTime());
+                        examRepository.save(exam);
+                        examEventService.broadcast(exam.getAccessCode(), "status",
+                            Map.of("status", "STARTED", "startTime", exam.getStartTime()));
+                    }
+
+                    // Classroom access validation
+                    try {
+                        if (exam.getClassroomId() != null && !exam.getClassroomId().isEmpty() && !"null".equalsIgnoreCase(exam.getClassroomId()) && !"undefined".equalsIgnoreCase(exam.getClassroomId())) {
+                            Classroom classroom = classroomRepository.findById(exam.getClassroomId()).orElse(null);
+                            if (classroom != null) {
+                                Authentication auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+                                if (auth == null || !auth.isAuthenticated() || "anonymousUser".equalsIgnoreCase(auth.getName())) {
+                                    return ResponseEntity.status(401).body("Yêu cầu xác thực tài khoản.");
+                                }
+                                String email = auth.getName();
+                                if (email == null || email.isEmpty()) {
+                                    return ResponseEntity.status(401).body("Yêu cầu xác thực tài khoản.");
+                                }
+                                User user = userRepository.findByEmail(email).orElse(null);
+                                if (user == null) {
+                                    return ResponseEntity.status(401).body("Yêu cầu xác thực tài khoản.");
+                                }
+                                
+                                // Teachers and Admins bypass membership check
+                                boolean isStudent = "student".equalsIgnoreCase(user.getRole());
+                                if (isStudent && (classroom.getStudentIds() == null || !classroom.getStudentIds().contains(user.getId()))) {
+                                    return ResponseEntity.status(403).body("Bài kiểm tra này chỉ dành riêng cho học sinh chính thức thuộc lớp: " + classroom.getName());
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Error validating classroom membership in lobby: " + e.getMessage());
+                        e.printStackTrace();
+                    }
+
                     if ("DRAFT".equals(exam.getStatus())) {
                         return ResponseEntity.badRequest().body("Phòng thi này chưa được mở.");
                     }
-                    if ("FINISHED".equals(exam.getStatus())) {
+                    if ("FINISHED".equals(exam.getStatus()) || "COMPLETED".equals(exam.getStatus())) {
                         return ResponseEntity.badRequest().body("Phòng thi này đã kết thúc.");
                     }
                     Map<String, Object> info = new HashMap<>();
@@ -145,16 +252,83 @@ public class ExamController {
                     info.put("status", exam.getStatus());
                     info.put("accessCode", exam.getAccessCode());
                     info.put("startTime", exam.getStartTime());
+                    info.put("scheduledStartTime", exam.getScheduledStartTime());
+                    info.put("aiProctoring", isEffectiveAiProctoring(exam));
+                    info.put("allowReview", exam.isAllowReview());
+                    info.put("autoDetectCheat", settingService.getBoolean(SettingService.AUTO_DETECT_CHEAT, true));
+                    
+                    // Determine preview mode for teachers/admins
+                    boolean isPreviewMode = false;
+                    try {
+                        Authentication auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+                        if (auth != null && auth.isAuthenticated() && !"anonymousUser".equalsIgnoreCase(auth.getName())) {
+                            String email = auth.getName();
+                            if (email != null && !email.isEmpty()) {
+                                User user = userRepository.findByEmail(email).orElse(null);
+                                if (user != null && !"student".equalsIgnoreCase(user.getRole())) {
+                                    isPreviewMode = true;
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Error determining preview mode in lobby: " + e.getMessage());
+                    }
+                    info.put("isPreviewMode", isPreviewMode);
+
                     return ResponseEntity.ok(info);
                 })
-                .orElse(ResponseEntity.notFound().build());
+                .orElse(ResponseEntity.status(404).body("Mã phòng thi không tồn tại."));
     }
 
     @GetMapping("/join/{code}")
     public ResponseEntity<?> joinExam(@PathVariable String code) {
-        return examRepository.findByAccessCode(code.toUpperCase())
+        return examRepository.findFirstByAccessCode(code.toUpperCase())
                 .map(exam -> {
-                    if (!"STARTED".equals(exam.getStatus()) && !"PUBLISHED".equals(exam.getStatus())) {
+                    // Auto-start logic
+                    if ("PUBLISHED".equals(exam.getStatus()) && exam.getScheduledStartTime() != null && System.currentTimeMillis() >= exam.getScheduledStartTime()) {
+                        exam.setStatus("STARTED");
+                        exam.setStartTime(exam.getScheduledStartTime());
+                        examRepository.save(exam);
+                        examEventService.broadcast(exam.getAccessCode(), "status",
+                            Map.of("status", "STARTED", "startTime", exam.getStartTime()));
+                    }
+
+                    // Classroom access validation
+                    try {
+                        if (exam.getClassroomId() != null && !exam.getClassroomId().isEmpty() && !"null".equalsIgnoreCase(exam.getClassroomId()) && !"undefined".equalsIgnoreCase(exam.getClassroomId())) {
+                            Classroom classroom = classroomRepository.findById(exam.getClassroomId()).orElse(null);
+                            if (classroom != null) {
+                                Authentication auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+                                if (auth == null || !auth.isAuthenticated() || "anonymousUser".equalsIgnoreCase(auth.getName())) {
+                                    return ResponseEntity.status(401).body("Yêu cầu xác thực tài khoản.");
+                                }
+                                String email = auth.getName();
+                                if (email == null || email.isEmpty()) {
+                                    return ResponseEntity.status(401).body("Yêu cầu xác thực tài khoản.");
+                                }
+                                User user = userRepository.findByEmail(email).orElse(null);
+                                if (user == null) {
+                                    return ResponseEntity.status(401).body("Yêu cầu xác thực tài khoản.");
+                                }
+                                
+                                // Teachers and Admins bypass membership check
+                                boolean isStudent = "student".equalsIgnoreCase(user.getRole());
+                                if (isStudent && (classroom.getStudentIds() == null || !classroom.getStudentIds().contains(user.getId()))) {
+                                    return ResponseEntity.status(403).body("Bài kiểm tra này chỉ dành riêng cho học sinh chính thức thuộc lớp: " + classroom.getName());
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Error validating classroom membership in join: " + e.getMessage());
+                        e.printStackTrace();
+                    }
+
+                    // Chỉ cho phép vào thi khi GV đã nhấn "Bắt đầu thi" (STARTED)
+                    if (!"STARTED".equals(exam.getStatus())) {
+                        if ("PUBLISHED".equals(exam.getStatus())) {
+                            return ResponseEntity.badRequest().body(
+                                "Giáo viên chưa bắt đầu buổi thi. Vui lòng chờ trong phòng chờ.");
+                        }
                         return ResponseEntity.badRequest().body("Kỳ thi này chưa bắt đầu hoặc đã kết thúc.");
                     }
                     if (exam.getStartTime() != null) {
@@ -167,14 +341,16 @@ public class ExamController {
                     int versionIdx = (int) (Math.random() * exam.getVersions().size());
                     ExamVersion selectedVersion = exam.getVersions().get(versionIdx);
                     
-                    // Trả về object chứa cả thông tin chung của kỳ thi
                     Map<String, Object> response = new HashMap<>();
                     response.put("title", exam.getTitle());
                     response.put("duration", exam.getDuration());
-                    response.put("startTime", exam.getStartTime()); // Gửi mốc bắt đầu của cả phòng
+                    response.put("startTime", exam.getStartTime());
                     response.put("versionCode", selectedVersion.getVersionCode());
                     response.put("questions", selectedVersion.getQuestions());
-                    response.put("extractedImages", exam.getExtractedImages());
+                    response.put("extractedImages", exam.getExtractedImages()); // Cần thiết để hiển thị ảnh trong câu hỏi
+                    response.put("aiProctoring", isEffectiveAiProctoring(exam));
+                    response.put("allowReview", exam.isAllowReview());
+                    response.put("autoDetectCheat", settingService.getBoolean(SettingService.AUTO_DETECT_CHEAT, true));
                     
                     return ResponseEntity.ok(response);
                 })
@@ -184,7 +360,29 @@ public class ExamController {
     @GetMapping("/{id}")
     public ResponseEntity<?> getExamById(@PathVariable String id) {
         return examRepository.findById(id)
-                .map(ResponseEntity::ok)
+                .map(exam -> {
+                    // Auto-start logic: Chuyển sang STARTED nếu thời gian đã điểm
+                    if ("PUBLISHED".equals(exam.getStatus()) && exam.getScheduledStartTime() != null && System.currentTimeMillis() >= exam.getScheduledStartTime()) {
+                        exam.setStatus("STARTED");
+                        exam.setStartTime(exam.getScheduledStartTime());
+                        examRepository.save(exam);
+                        // Thông báo realtime cho tất cả client (giáo viên & học sinh)
+                        examEventService.broadcast(exam.getAccessCode(), "status",
+                            Map.of("status", "STARTED", "startTime", exam.getStartTime()));
+                    }
+                    // Auto-finish logic: Tự động kết thúc khi đã hết giờ
+                    if ("STARTED".equals(exam.getStatus()) && exam.getStartTime() != null && exam.getDuration() > 0) {
+                        long endTime = exam.getStartTime() + (long) exam.getDuration() * 60 * 1000;
+                        if (System.currentTimeMillis() > endTime) {
+                            exam.setStatus("COMPLETED");
+                            examRepository.save(exam);
+                            examEventService.broadcast(exam.getAccessCode(), "status",
+                                Map.of("status", "COMPLETED"));
+                        }
+                    }
+                    applyGlobalExamSettings(exam);
+                    return ResponseEntity.ok(exam);
+                })
                 .orElse(ResponseEntity.notFound().build());
     }
 
@@ -192,11 +390,37 @@ public class ExamController {
     public ResponseEntity<?> updateExam(@PathVariable String id, @RequestBody Exam exam) {
         try {
             exam.setId(id);
+            // Bảo toàn accessCode từ document cũ nếu payload không gửi lên
+            if (exam.getAccessCode() == null || exam.getAccessCode().isEmpty()) {
+                examRepository.findById(id).ifPresent(existing -> {
+                    if (existing.getAccessCode() != null && !existing.getAccessCode().isEmpty()) {
+                        exam.setAccessCode(existing.getAccessCode());
+                    } else {
+                        // Tạo mới nếu cả hai đều null
+                        exam.setAccessCode(java.util.UUID.randomUUID().toString().substring(0, 6).toUpperCase());
+                    }
+                });
+            }
+            applyGlobalExamSettings(exam);
+            autoCategorizeExamToFolder(exam);
             Exam updatedExam = examRepository.save(exam);
             return ResponseEntity.ok(updatedExam);
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error updating exam: " + e.getMessage());
         }
+    }
+
+    /**
+     * Tạo/làm mới mã phòng thi cho các đề chưa có mã
+     */
+    @PostMapping("/{id}/generate-code")
+    public ResponseEntity<?> generateAccessCode(@PathVariable String id) {
+        return examRepository.findById(id).map(exam -> {
+            String newCode = java.util.UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+            exam.setAccessCode(newCode);
+            examRepository.save(exam);
+            return ResponseEntity.ok(Map.of("accessCode", newCode));
+        }).orElse(ResponseEntity.notFound().build());
     }
 
     @DeleteMapping("/{id}")
@@ -213,6 +437,12 @@ public class ExamController {
     public ResponseEntity<?> getExamResultsByAccessCode(@PathVariable String accessCode) {
         try {
             List<ExamResult> results = resultRepository.findByExamId(accessCode);
+            if (results.isEmpty()) {
+                Optional<Exam> exam = examRepository.findFirstByAccessCode(accessCode.toUpperCase());
+                if (exam.isPresent()) {
+                    results = resultRepository.findByExamId(exam.get().getId());
+                }
+            }
             return ResponseEntity.ok(results);
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error fetching results: " + e.getMessage());
@@ -222,8 +452,11 @@ public class ExamController {
     @GetMapping("/teacher/{teacherId}")
     public ResponseEntity<?> getTeacherExams(@PathVariable String teacherId) {
         try {
-            List<Exam> exams = examRepository.findByTeacherId(teacherId);
+            List<Exam> exams = examRepository.findByTeacherId(teacherId).stream()
+                    .filter(exam -> !exam.isPractice() && !exam.isBankItem() && !exam.isTemplate())
+                    .toList();
             for (Exam exam : exams) {
+                applyGlobalExamSettings(exam);
                 if (exam.getAccessCode() != null) {
                     long count = resultRepository.countByExamId(exam.getAccessCode());
                     exam.setSubmissionCount(count);
@@ -235,13 +468,49 @@ public class ExamController {
         }
     }
 
+    @GetMapping("/teacher/{teacherId}/bank-items")
+    public ResponseEntity<?> getTeacherBankItems(@PathVariable String teacherId) {
+        try {
+            List<Exam> exams = examRepository.findByTeacherId(teacherId).stream()
+                    .filter(exam -> exam.isBankItem() || exam.isPractice())
+                    .toList();
+            for (Exam exam : exams) {
+                applyGlobalExamSettings(exam);
+            }
+            return ResponseEntity.ok(exams);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error fetching bank exams: " + e.getMessage());
+        }
+    }
+
     /**
-     * Giao vien bat dau ky thi (WAITING -> STARTED), ghi startTime
+     * Lấy danh sách đề mẫu (Kho đề) của giáo viên
+     */
+    @GetMapping("/teacher/{teacherId}/templates")
+    public ResponseEntity<?> getTeacherTemplates(@PathVariable String teacherId) {
+        try {
+            List<Exam> exams = examRepository.findByTeacherId(teacherId).stream()
+                    .filter(Exam::isTemplate)
+                    .toList();
+            for (Exam exam : exams) {
+                applyGlobalExamSettings(exam);
+            }
+            return ResponseEntity.ok(exams);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error fetching templates: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Giáo viên bắt đầu kỳ thi (WAITING -> STARTED), ghi startTime
      */
     @PostMapping("/{id}/start")
     public ResponseEntity<?> startExam(@PathVariable String id) {
         try {
             return examRepository.findById(id).map(exam -> {
+                if (exam.isPractice() || exam.isBankItem()) {
+                    return ResponseEntity.badRequest().body(Map.of("message", "Không thể thực hiện trên bài ôn tập Ngân hàng đề."));
+                }
                 exam.setStatus("STARTED");
                 exam.setStartTime(System.currentTimeMillis());
                 examRepository.save(exam);
@@ -249,7 +518,7 @@ public class ExamController {
                 examEventService.broadcast(exam.getAccessCode(), "status",
                     Map.of("status", "STARTED", "startTime", exam.getStartTime()));
                 return ResponseEntity.ok(Map.of(
-                    "message", "Ky thi da bat dau.",
+                    "message", "Kỳ thi đã bắt đầu.",
                     "startTime", exam.getStartTime()
                 ));
             }).orElse(ResponseEntity.notFound().build());
@@ -259,18 +528,21 @@ public class ExamController {
     }
 
     /**
-     * Giao vien dong phong thi thu cong truoc khi het gio
+     * Giáo viên đóng phòng thi thủ công trước khi hết giờ
      */
     @PostMapping("/{id}/close")
     public ResponseEntity<?> closeExam(@PathVariable String id) {
         try {
             return examRepository.findById(id).map(exam -> {
+                if (exam.isPractice() || exam.isBankItem()) {
+                    return ResponseEntity.badRequest().body(Map.of("message", "Không thể thực hiện trên bài ôn tập Ngân hàng đề."));
+                }
                 exam.setStatus("FINISHED");
                 examRepository.save(exam);
                 // Broadcast cho tất cả biết phòng đã đóng
                 examEventService.broadcast(exam.getAccessCode(), "status",
                     Map.of("status", "FINISHED"));
-                return ResponseEntity.ok(Map.of("message", "Phong thi da duoc dong thanh cong."));
+                return ResponseEntity.ok(Map.of("message", "Phòng thi đã được đóng thành công."));
             }).orElse(ResponseEntity.notFound().build());
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error closing exam: " + e.getMessage());
@@ -278,7 +550,26 @@ public class ExamController {
     }
 
     /**
-     * Doi trang thai exam FINISHED thanh PUBLISHED lai (mo lai phong thi)
+     * Hệ thống tự động kết thúc khi hết giờ
+     */
+    @PostMapping("/{id}/finish")
+    public ResponseEntity<?> finishExam(@PathVariable String id) {
+        try {
+            return examRepository.findById(id).map(exam -> {
+                exam.setStatus("COMPLETED");
+                examRepository.save(exam);
+                // Broadcast cho tất cả biết bài thi đã kết thúc
+                examEventService.broadcast(exam.getAccessCode(), "status",
+                    Map.of("status", "COMPLETED"));
+                return ResponseEntity.ok(Map.of("message", "Bài thi đã kết thúc tự động."));
+            }).orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error finishing exam: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Đổi trạng thái exam FINISHED thành PUBLISHED lại (mở lại phòng thi)
      */
     @PostMapping("/{id}/reopen")
     public ResponseEntity<?> reopenExam(@PathVariable String id) {
@@ -286,10 +577,180 @@ public class ExamController {
             return examRepository.findById(id).map(exam -> {
                 exam.setStatus("PUBLISHED");
                 examRepository.save(exam);
-                return ResponseEntity.ok(Map.of("message", "Phong thi da duoc mo lai."));
+                return ResponseEntity.ok(Map.of("message", "Phòng thi đã được mở lại."));
             }).orElse(ResponseEntity.notFound().build());
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error reopening exam: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Chuyển đề thi vào Ngân hàng đề thi
+     */
+    @PostMapping("/{id}/publish-to-bank")
+    public ResponseEntity<?> publishToBank(@PathVariable String id) {
+        try {
+            return examRepository.findById(id).map(exam -> {
+                exam.setPractice(true);
+                exam.setBankItem(true);
+                exam.setStatus("PUBLISHED"); // Ensure it's published
+                autoCategorizeExamToFolder(exam);
+                examRepository.save(exam);
+                return ResponseEntity.ok(Map.of("message", "Đã đưa đề thi vào Ngân hàng thành công."));
+            }).orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error publishing to bank: " + e.getMessage());
+        }
+    }
+
+    private void autoCategorizeExamToFolder(Exam exam) {
+        if (exam.isPractice()) {
+            String grade = exam.getGrade();
+            String subject = exam.getSubject();
+            if (grade != null && subject != null) {
+                grade = grade.trim();
+                subject = subject.trim();
+                if (!grade.isEmpty() && !subject.isEmpty()) {
+                    try {
+                        java.util.Optional<com.auracademic.backend.model.ExamBankFolder> folderOpt = 
+                            folderRepository.findByGradeAndSubject(grade, subject);
+                        if (folderOpt.isPresent()) {
+                            exam.setFolderId(folderOpt.get().getId());
+                        } else {
+                            com.auracademic.backend.model.ExamBankFolder newFolder = new com.auracademic.backend.model.ExamBankFolder();
+                            newFolder.setName(subject + " - " + grade);
+                            newFolder.setDescription("Thư mục tự động tạo cho chuyên đề " + subject + " - " + grade);
+                            newFolder.setGrade(grade);
+                            newFolder.setSubject(subject);
+                            newFolder.setTeacherId("SYSTEM");
+                            newFolder.setCreatedAt(java.time.LocalDateTime.now());
+                            newFolder = folderRepository.save(newFolder);
+                            exam.setFolderId(newFolder.getId());
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Error auto-categorizing exam to folder: " + e.getMessage());
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Gỡ đề thi khỏi Ngân hàng đề thi
+     */
+    @PostMapping("/{id}/remove-from-bank")
+    public ResponseEntity<?> removeFromBank(@PathVariable String id) {
+        try {
+            return examRepository.findById(id).map(exam -> {
+                exam.setPractice(false);
+                exam.setBankItem(false);
+                examRepository.save(exam);
+                return ResponseEntity.ok(Map.of("message", "Đã gỡ đề thi khỏi Ngân hàng thành công."));
+            }).orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error removing from bank: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Nhân bản đề thi từ kho mẫu để tạo kỳ thi thực tế (giao bài cho lớp)
+     */
+    @PostMapping("/{id}/clone-to-session")
+    public ResponseEntity<?> cloneToSession(@PathVariable String id, @RequestBody Map<String, Object> payload) {
+        try {
+            return examRepository.findById(id).map(template -> {
+                Exam session = new Exam();
+                session.setTitle(template.getTitle());
+                session.setExtractedImages(template.getExtractedImages());
+                session.setDifficulty(template.getDifficulty());
+                session.setGrade(template.getGrade());
+                session.setSubject(template.getSubject());
+                session.setTeacherId(template.getTeacherId());
+                session.setTeacherName(template.getTeacherName());
+                
+                session.setTemplate(false);
+                session.setPractice(false);
+                session.setBankItem(false);
+
+                // Tạo các phiên bản đề thi dựa trên versionCount
+                int versionCount = 1;
+                if (payload.containsKey("versionCount") && payload.get("versionCount") != null) {
+                    versionCount = ((Number) payload.get("versionCount")).intValue();
+                }
+                
+                List<ExamVersion> versions = new java.util.ArrayList<>();
+                if (template.getVersions() != null && !template.getVersions().isEmpty()) {
+                    List<com.auracademic.backend.model.Question> baseQuestions = template.getVersions().get(0).getQuestions();
+                    String[] codes = {"101", "202", "303", "404"};
+                    for (int i = 0; i < versionCount; i++) {
+                        ExamVersion ver = new ExamVersion();
+                        ver.setVersionCode(i < codes.length ? codes[i] : ("MĐ" + (100 + i)));
+                        List<com.auracademic.backend.model.Question> shuffled = new java.util.ArrayList<>(baseQuestions);
+                        if (i > 0) {
+                            java.util.Collections.shuffle(shuffled);
+                        }
+                        ver.setQuestions(shuffled);
+                        versions.add(ver);
+                    }
+                } else {
+                    session.setVersions(template.getVersions());
+                }
+                session.setVersions(versions);
+                
+                // Cấu hình từ payload
+                if (payload.containsKey("duration")) {
+                    session.setDuration(((Number) payload.get("duration")).intValue());
+                } else {
+                    session.setDuration(template.getDuration());
+                }
+                
+                if (payload.containsKey("shuffle")) {
+                    session.setShuffle((Boolean) payload.get("shuffle"));
+                } else {
+                    session.setShuffle(template.isShuffle());
+                }
+                
+                if (payload.containsKey("aiProctoring")) {
+                    session.setAiProctoring((Boolean) payload.get("aiProctoring"));
+                } else {
+                    session.setAiProctoring(template.isAiProctoring());
+                }
+
+                if (payload.containsKey("allowReview")) {
+                    session.setAllowReview((Boolean) payload.get("allowReview"));
+                } else {
+                    session.setAllowReview(template.isAllowReview());
+                }
+                
+                if (payload.containsKey("classroomId")) {
+                    session.setClassroomId((String) payload.get("classroomId"));
+                }
+                
+                if (payload.containsKey("scheduledStartTime") && payload.get("scheduledStartTime") != null) {
+                    session.setScheduledStartTime(((Number) payload.get("scheduledStartTime")).longValue());
+                    session.setStatus("PUBLISHED");
+                } else {
+                    session.setStatus("WAITING");
+                }
+                
+                session.setAccessCode(java.util.UUID.randomUUID().toString().substring(0, 6).toUpperCase());
+                session.setCreatedAt(java.time.LocalDateTime.now());
+                
+                Exam savedSession = examRepository.save(session);
+                return ResponseEntity.ok(savedSession);
+            }).orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error cloning exam: " + e.getMessage());
+        }
+    }
+
+    private boolean isEffectiveAiProctoring(Exam exam) {
+        return settingService.getBoolean(SettingService.ENABLE_AI_PROCTOR, true) && exam.isAiProctoring();
+    }
+
+    private void applyGlobalExamSettings(Exam exam) {
+        if (!settingService.getBoolean(SettingService.ENABLE_AI_PROCTOR, true)) {
+            exam.setAiProctoring(false);
         }
     }
 }

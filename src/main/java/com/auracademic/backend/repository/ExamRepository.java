@@ -7,6 +7,9 @@ import java.util.Optional;
 
 public interface ExamRepository extends MongoRepository<Exam, String> {
     List<Exam> findByTeacherId(String teacherId);
-    Optional<Exam> findByAccessCode(String accessCode);
+    Optional<Exam> findFirstByAccessCode(String accessCode);
     long countByStatus(String status);
+    List<Exam> findByIsPractice(boolean isPractice);
+    List<Exam> findByFolderId(String folderId);
+    List<Exam> findByClassroomId(String classroomId);
 }

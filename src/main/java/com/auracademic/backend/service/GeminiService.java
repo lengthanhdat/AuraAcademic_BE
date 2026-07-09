@@ -6,6 +6,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -39,9 +40,16 @@ public class GeminiService {
     @Value("${gemini.api.key}")
     private String apiKey;
 
-    // Dùng gemini-1.5-flash làm primary: nhanh hơn, ổn định hơn 2.5-flash ở free tier
+    @Autowired
+    private SettingService settingService;
+
+    private String getActiveApiKey() {
+        return settingService.getSetting("gemini.api.key", this.apiKey);
+    }
+
+    // gemini-2.5-flash: model chính. parseResponse() đã xử lý đúng thinking parts.
+    // Khi hết quota hoặc lỗi → AiProcessingService sẽ fallback sang Groq tự động.
     private static final String PRIMARY_MODEL   = "gemini-2.5-flash";
-    private static final String FALLBACK_MODEL  = "gemini-2.5-flash";
     private static final String GEMINI_HOST     = "https://generativelanguage.googleapis.com/";
 
     // Không giới hạn văn bản theo yêu cầu của user
@@ -120,6 +128,34 @@ public class GeminiService {
     }
 
     /**
+     * Sinh câu hỏi dựa trên chủ đề / lời nhắc tự do (không cần tài liệu).
+     * AI sẽ tự sử dụng kho kiến thức nội tại để biên soạn câu hỏi chuẩn sư phạm.
+     *
+     * @param topic       Chủ đề hoặc prompt mô tả yêu cầu đề thi (Tiếng Việt / Tiếng Anh)
+     * @param difficulty  Mức độ khó: EASY | MEDIUM | HARD | EXPERT
+     * @param language    Ngôn ngữ câu hỏi: "vi" (Tiếng Việt) | "en" (Tiếng Anh)
+     * @param count       Số lượng câu hỏi cần tạo
+     */
+    @Retryable(
+        retryFor  = { Exception.class },
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 2000, multiplier = 2.0)
+    )
+    public List<Question> generateByTopic(String topic, String difficulty, String language, int count) throws Exception {
+        log.info("[Gemini] Sinh {} câu hỏi từ chủ đề '{}' — độ khó: {}, ngôn ngữ: {}", count, topic, difficulty, language);
+        String prompt = buildTopicPrompt(topic, difficulty, language, count);
+        return callGeminiApi(prompt, PRIMARY_MODEL);
+    }
+
+    @Recover
+    public List<Question> recoverGenerateByTopic(Exception ex, String topic, String difficulty, String language, int count) {
+        log.error("[Gemini] generateByTopic thất bại sau 3 lần retry. Chủ đề: '{}', lỗi: {}", topic, ex.getMessage());
+        throw new RuntimeException(
+            "AI không thể tạo câu hỏi cho chủ đề này sau 3 lần thử. Lý do: " + ex.getMessage(), ex
+        );
+    }
+
+    /**
      * Tinh chỉnh câu hỏi theo lệnh của giáo viên (dùng cho chat-refine panel).
      * Giữ nguyên multimodal để hỗ trợ ảnh nếu cần.
      */
@@ -141,8 +177,200 @@ public class GeminiService {
     }
 
     // ─────────────────────────────────────────────────────────────────
+    // PUBLIC API — Tự động kiểm duyệt tài liệu giảng dạy
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Gọi Gemini AI để kiểm duyệt tài liệu — đa ngôn ngữ, nhận diện mọi từ cấm/tục tĩu.
+     * Trả về Map:
+     *   - "approved"        (Boolean)      : true = duyệt, false = từ chối
+     *   - "reason"          (String)       : lý do cụ thể bằng tiếng Việt
+     *   - "violationType"   (String)       : PROFANITY | SEXUAL_CONTENT | VIOLENCE |
+     *                                        HATE_SPEECH | POLITICAL | COPYRIGHT | NONE
+     *   - "suggestedTags"   (List<String>) : gợi ý thẻ tag học thuật
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> reviewMaterial(String title, String description,
+                                               String subject, String fileType,
+                                               String category, String fileName,
+                                               String extractedContent) {
+        // Chuẩn bị phần nội dung file để đưa vào prompt
+        String contentSection = (extractedContent != null && !extractedContent.isBlank())
+            ? "\n\n# NỘI DUNG BÊN TRONG FILE (trích xuất tự động — đây là phần QUAN TRỌNG NHẤT):\n```\n" + extractedContent + "\n```"
+            : "\n\n# NỘI DUNG FILE: Không thể trích xuất (file nhị phân/video) — chỉ kiểm tra metadata.";
+
+        String prompt = """
+            # VAI TRÒ
+            Bạn là hệ thống kiểm duyệt nội dung tự động (Content Moderation AI) của nền tảng giáo dục Aura Academic.
+            Nhiệm vụ: BẢO VỆ môi trường học thuật bằng cách phát hiện và chặn mọi nội dung không phù hợp
+            TRƯỚC KHI tài liệu được công khai đến học sinh.
+
+            # THÔNG TIN TÀI LIỆU
+            - Tên file gốc : %s
+            - Tiêu đề     : %s
+            - Mô tả       : %s
+            - Môn học     : %s
+            - Định dạng   : %s
+            - Phân loại   : %s
+            %s
+
+            # TIÊU CHÍ KIỂM DUYỆT (phân tích TẤT CẢ ngôn ngữ — bao gồm cả nội dung file bên trên)
+
+            ## 🔴 MỨC 1 — TỰ ĐỘNG TỪ CHỐI NGAY
+
+            ### 1. NGÔN TỤC & TỪ CẤM (PROFANITY) — nhận diện ĐA NGÔN NGỮ:
+            **Tiếng Việt:** đụ, lồn, cặc, địt, đéo, đm, đmm, vcl, vkl, clm, dcm, địt con mẹ, đụ má
+            Teen code / biến thể: đ**, c*c, l*n, đ.ụ, d.ụ, loz, cak, buoi, buồi
+            Leet speak: d_u, c4c, l0n, du ma, du me, du ba, d1t, c4c
+            Tiếng lóng: vãi, vl, đù má, tổ cha, đĩ, điếm, cave
+
+            **Tiếng Anh:** fuck, shit, bitch, cunt, cock, dick, pussy, ass, asshole, motherfucker, whore, slut
+            Leet: f*ck, sh!t, b!tch, @ss, f**k, fck, btch, cnt
+
+            **Tiếng Trung/Nhật/Hàn:** 操你妈, 草泥马, 滚蛋, 傻逼, ちくしょう, くそ, 씨발, 개새끼, 존나
+
+            **Tiếng Pháp/TBN:** merde, putain, salope, coño, puta, joder, hijo de puta
+
+            **Ký tự thay thế:** *, @, !, 0, 3, 4, $ thay chữ → VẪN VI PHẠM nếu đọc ra được từ tục.
+
+            ### 2. NỘI DUNG TÌNH DỤC (SEXUAL_CONTENT): Mô tả hành vi tình dục, khiêu dâm, NSFW
+            ### 3. BẠO LỰC & KỲ THỊ (VIOLENCE / HATE_SPEECH): Kêu gọi bạo lực, phân biệt chủng tộc
+            ### 4. CHÍNH TRỊ NHẠY CẢM (POLITICAL): Tuyên truyền, chống nhà nước
+            ### 5. VI PHẠM BẢN QUYỀN (COPYRIGHT): Sao chép tài liệu thương mại rõ ràng
+
+            ## 🟢 NGOẠI LỆ — KHÔNG TỪ CHỐI:
+            - Từ y khoa (dương vật, âm đạo, sinh sản) trong văn cảnh học thuật → CHẤP NHẬN
+            - Phân tích văn học nhạy cảm với mô tả học thuật → CHẤP NHẬN
+            - Thông tin sơ sài không rõ ràng → ưu tiên DUYỆT
+
+            ## 🟡 MỨC 2 — TÍNH HỌC THUẬT:
+            - Nội dung phải liên quan đến giáo dục, học tập, môn học khai báo
+            - Tiêu đề và mô tả phải rõ ràng, chuyên nghiệp
+
+            # FORMAT TRẢ VỀ (DUY NHẤT JSON, KHÔNG GIẢI THÍCH THÊM):
+            {"approved":true,"reason":"Lý do tiếng Việt","violationType":"NONE","suggestedTags":["tag1","tag2"]}
+
+            violationType chỉ nhận: PROFANITY, SEXUAL_CONTENT, VIOLENCE, HATE_SPEECH, POLITICAL, COPYRIGHT, NONE
+            """.formatted(
+                fileName        != null ? fileName        : "",
+                title           != null ? title           : "",
+                description     != null ? description     : "",
+                subject         != null ? subject         : "",
+                fileType        != null ? fileType        : "",
+                category        != null ? category        : "",
+                contentSection
+        );
+
+        try {
+            String raw = callGeminiText(prompt);
+            String sanitized = raw.trim();
+            if (sanitized.contains("```")) {
+                int s = sanitized.indexOf("```"), e = sanitized.lastIndexOf("```");
+                if (s != e) { sanitized = sanitized.substring(s + 3, e); }
+                if (sanitized.toLowerCase().startsWith("json")) sanitized = sanitized.substring(4).trim();
+            }
+            Map<String, Object> result = mapper.readValue(sanitized, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            log.info("[Gemini-Review] approved={}, violationType={}, reason={}",
+                    result.get("approved"), result.get("violationType"), result.get("reason"));
+            return result;
+        } catch (Exception ex) {
+            log.error("[Gemini-Review] Kiểm duyệt thất bại: {}", ex.getMessage());
+            return Map.of(
+                "approved", true,
+                "reason", "AI kiểm duyệt tạm thời không khả dụng. Tài liệu được chuyển chờ Admin duyệt thủ công.",
+                "violationType", "NONE",
+                "suggestedTags", List.of()
+            );
+        }
+    }
+
+    /** Kiểm tra sức sống và dung lượng token hiện tại */
+    public Map<String, Object> checkHealth() {
+        String key = getActiveApiKey();
+        if (key == null || key.isBlank()) return Map.of("ok", false, "msg", "Chưa có token");
+        try {
+            String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash?key=" + key;
+            restTemplate.getForEntity(url, String.class);
+            // Nếu get OK -> Token valid. Gemini free model default values:
+            return Map.of("ok", true, "model", "Gemini 2.5 Flash", "rpm", "15 RPM", "tpm", "1,000,000 TPM", "rpd", "1,500 RPD");
+        } catch (HttpStatusCodeException e) {
+            if (e.getStatusCode().value() == 429) return Map.of("ok", true, "msg", "Quá giới hạn rate limit", "exhausted", true);
+            return Map.of("ok", false, "msg", "Token không hợp lệ: HTTP " + e.getStatusCode().value());
+        } catch (Exception e) {
+            return Map.of("ok", false, "msg", "Lỗi kết nối: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Hỗ trợ Chat Assistant sinh câu trả lời Markdown tự do dựa trên prompt.
+     */
+    @Retryable(
+        retryFor  = { Exception.class },
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 1000, multiplier = 2.0)
+    )
+    public String generateChatResponse(String prompt) throws Exception {
+        log.info("[Gemini] Đang sinh phản hồi chat hỗ trợ...");
+        String url = buildUrl(PRIMARY_MODEL);
+        
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))));
+        requestBody.put("generationConfig", Map.of(
+            "temperature", 0.7 // Tăng sáng tạo cho chat
+        ));
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        
+        String responseStr = restTemplate.postForObject(url, new HttpEntity<>(requestBody, headers), String.class);
+        
+        Map<String, Object> responseMap = mapper.readValue(responseStr, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+        List<Map<String, Object>> candidates = (List<Map<String, Object>>) responseMap.get("candidates");
+        if (candidates == null || candidates.isEmpty()) throw new RuntimeException("Gemini candidates rỗng");
+        Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
+        List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
+        
+        String rawText = null;
+        for (Map<String, Object> part : parts) {
+            Boolean isThought = (Boolean) part.get("thought");
+            if (Boolean.TRUE.equals(isThought)) continue;
+            rawText = (String) part.get("text");
+            if (rawText != null && !rawText.isBlank()) break;
+        }
+        return rawText != null ? rawText.trim() : "Trợ lý AI tạm thời không có phản hồi.";
+    }
+    
+    @Recover
+    public String recoverGenerateChatResponse(Exception ex, String prompt) {
+        log.error("[Gemini] Chat Assistant thất bại sau 3 lần thử: {}", ex.getMessage());
+        throw new RuntimeException("Trợ lý AI không phản hồi sau 3 lần thử.", ex);
+    }
+
+    /** Gọi Gemini API và trả về raw text (không parse Question) */
+    private String callGeminiText(String prompt) throws Exception {
+        String url = buildUrl(PRIMARY_MODEL);
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))));
+        requestBody.put("generationConfig", Map.of(
+            "temperature", 0.1,
+            "response_mime_type", "application/json"
+        ));
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        String responseStr = restTemplate.postForObject(url, new HttpEntity<>(requestBody, headers), String.class);
+
+        Map<String, Object> responseMap = mapper.readValue(responseStr, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+        List<Map<String, Object>> candidates = (List<Map<String, Object>>) responseMap.get("candidates");
+        if (candidates == null || candidates.isEmpty()) throw new RuntimeException("Gemini candidates rỗng");
+        Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
+        List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
+        return (String) parts.get(0).get("text");
+    }
+
+    // ─────────────────────────────────────────────────────────────────
     // PROMPT BUILDERS
     // ─────────────────────────────────────────────────────────────────
+
 
     private String buildGeneratePrompt(String text, int count) {
         return """
@@ -160,12 +388,52 @@ public class GeminiService {
             3. ĐÁNH DẤU ĐÁP ÁN ĐÚNG: Mỗi câu hỏi phải có đủ 4 lựa chọn. Đánh dấu `isCorrect: true` cho đáp án đúng dựa vào gợi ý trong đề (ví dụ: chữ in đậm, gạch chân, hoặc đáp án có màu khác). Nếu không có gợi ý, mặc định chọn đáp án đầu tiên (A) là đúng.
             4. NẾU trong nội dung gốc có các đoạn mã [IMG_0], [IMG_1]... thì BẮT BUỘC PHẢI GIỮ LẠI nguyên vẹn các đoạn mã này ở đúng vị trí của chúng.
             5. NẾU trong nội dung gốc có Bảng biểu (được thể hiện bằng Markdown), BẮT BUỘC PHẢI GIỮ LẠI toàn bộ cấu trúc Markdown của bảng đó.
-            6. Trả về DUY NHẤT một JSON array. Không giải thích gì thêm.
-            7. Nếu tài liệu thực tế không có đủ %d câu hỏi, hãy trích xuất toàn bộ câu hỏi có trong đó, sau đó tự tạo thêm câu hỏi bám sát nội dung tài liệu để đủ đúng %d câu.
+            6. QUY TẮC BẮT BUỘC VỀ TOÁN HỌC: BẮT BUỘC sử dụng định dạng LaTeX (bọc trong `$ ... $` hoặc `$$ ... $$`) cho TẤT CẢ các công thức toán học, biến số, ký hiệu, phương trình trong cả nội dung câu hỏi lẫn các đáp án.
+            7. Trả về DUY NHẤT một JSON array. Không giải thích gì thêm.
+            8. Nếu tài liệu thực tế không có đủ %d câu hỏi, hãy trích xuất toàn bộ câu hỏi có trong đó, sau đó tự tạo thêm câu hỏi bám sát nội dung tài liệu để đủ đúng %d câu.
 
             Định dạng JSON:
             [{"id":"1","type":"Trắc nghiệm","text":"Nội dung câu hỏi (Không chứa đáp án)","options":[{"id":"a","text":"Nội dung A","isCorrect":true},{"id":"b","text":"Nội dung B","isCorrect":false},{"id":"c","text":"Nội dung C","isCorrect":false},{"id":"d","text":"Nội dung D","isCorrect":false}]}]
             """.formatted(text, count, count, count);
+    }
+
+    private String buildTopicPrompt(String topic, String difficulty, String language, int count) {
+        String difficultyDesc = switch (difficulty.toUpperCase()) {
+            case "EASY"   -> "Mức cơ bản (Nhận biết & Thông hiểu). Câu hỏi trực tiếp, rõ ràng, dành cho học sinh mới học.";
+            case "HARD"   -> "Mức nâng cao (Vận dụng cao). Câu hỏi đòi hỏi tư duy sâu, phân tích và tổng hợp kiến thức.";
+            case "EXPERT" -> "Mức chuyên gia (Phân hóa cao). Câu hỏi học thuật, bẫy tinh vi, phân hóa học sinh giỏi.";
+            default       -> "Mức trung bình (Thông hiểu & Vận dụng). Hỗn hợp câu dễ và khó vừa.";
+        };
+        String langInstruction = "en".equalsIgnoreCase(language)
+            ? "NGÔN NGỮ: Nếu yêu cầu đề tài nêu rõ một ngôn ngữ/môn ngoại ngữ cụ thể thì GIỮ ĐÚNG ngôn ngữ đó. Nếu không nêu rõ, write all questions and answer choices in English."
+            : "NGÔN NGỮ: Nếu yêu cầu đề tài nêu rõ một ngôn ngữ/môn ngoại ngữ cụ thể (ví dụ English, IELTS, TOEIC, Tiếng Anh) thì GIỮ ĐÚNG ngôn ngữ đó và TUYỆT ĐỐI KHÔNG dịch sang Tiếng Việt. Chỉ viết bằng Tiếng Việt khi yêu cầu đề tài không chỉ định ngôn ngữ khác.";
+
+        return """
+            # VAI TRÒ
+            Bạn là Giáo sư chuyên gia biên soạn đề thi hàng đầu Việt Nam. Bạn có kiến thức uyên thâm về mọi môn học,
+            chương trình giáo dục phổ thông và đại học. Nhiệm vụ: tự biên soạn bộ câu hỏi trắc nghiệm chất lượng cao
+            hoàn toàn dựa trên kho tri thức nội tại của mình, KHÔNG dựa vào bất kỳ tài liệu nào được cung cấp.
+
+            # YÊU CẦU ĐỀ TÀI
+            %s
+
+            # THÔNG SỐ ĐỀ THI
+            - Số lượng câu hỏi: ĐÚNG %d câu. Không thiếu, không thừa.
+            - Độ khó: %s
+            - %s
+
+            # TIÊU CHUẨN CHẤT LƯỢNG (BẮT BUỘC TUÂN THỦ)
+            1. TÍNH CHÍNH XÁC KHOA HỌC: Mọi câu hỏi và đáp án phải đúng 100%% về mặt học thuật.
+            2. PHÂN HÓA NĂNG LỰC: Các lựa chọn sai (distractors) phải hợp lý, gần đúng, dễ nhầm lẫn, không phải ngẫu nhiên.
+            3. TÍNH ĐỘC LẬP: Các câu hỏi không được lặp ý, không được phụ thuộc vào nhau.
+            4. MỖI CÂU phải có đúng 4 lựa chọn (A, B, C, D), chỉ đúng 1 đáp án.
+            5. TRÁNH LỖI PHỔ BIẾN: Không có dạng câu "Tất cả đều đúng" hoặc "Không có đáp án nào đúng".
+            6. ĐỘ ĐA DẠNG: Bao quát nhiều khía cạnh khác nhau của chủ đề, không hỏi lặp đi lặp lại một nội dung.
+            7. QUY TẮC TOÁN HỌC (TỐI QUAN TRỌNG): Đối với các môn tự nhiên, BẮT BUỘC sử dụng định dạng LaTeX (bọc trong `$ ... $` hoặc `$$ ... $$`) cho TẤT CẢ các công thức, biến số, hàm số, phương trình, ký hiệu toán học (Ví dụ: dùng `$f(x) = x^2.sin(x)$` thay vì ghi chữ thuần). Áp dụng cho cả đề bài và 4 phương án.
+
+            # ĐỊNH DẠNG OUTPUT (DUY NHẤT JSON ARRAY — KHÔNG GIẢI THÍCH THÊM)
+            [{"id":"1","type":"Trắc nghiệm","text":"Nội dung câu hỏi","options":[{"id":"a","text":"Đáp án A","isCorrect":true},{"id":"b","text":"Đáp án B","isCorrect":false},{"id":"c","text":"Đáp án C","isCorrect":false},{"id":"d","text":"Đáp án D","isCorrect":false}]}]
+            """.formatted(topic, count, difficultyDesc, langInstruction);
     }
 
     private String buildRefinePrompt(String command, String text) {
@@ -235,7 +503,7 @@ public class GeminiService {
     private String buildUrl(String modelName) {
         // Luôn dùng v1beta để hỗ trợ response_mime_type
         String apiVersion = "v1beta";
-        return GEMINI_HOST + apiVersion + "/models/" + modelName + ":generateContent?key=" + apiKey;
+        return GEMINI_HOST + apiVersion + "/models/" + modelName + ":generateContent?key=" + getActiveApiKey();
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -250,19 +518,37 @@ public class GeminiService {
      */
     @SuppressWarnings("unchecked")
     private List<Question> parseResponse(String rawResponse) throws Exception {
-        // Lấy text từ Gemini response structure
         Map<String, Object> responseMap = mapper.readValue(rawResponse, new TypeReference<>() {});
         List<Map<String, Object>> candidates = (List<Map<String, Object>>) responseMap.get("candidates");
 
         if (candidates == null || candidates.isEmpty()) {
-            throw new RuntimeException("Gemini không trả về câu trả lời (candidates rỗng).");
+            // Kiểm tra promptFeedback để cung cấp thông báo lỗi rõ hơn
+            Object feedback = responseMap.get("promptFeedback");
+            log.error("[Gemini] candidates rỗng. promptFeedback: {}", feedback);
+            throw new RuntimeException("Gemini không trả về câu trả lời (candidates rỗng). PromptFeedback: " + feedback);
         }
 
         Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
+        if (content == null) {
+            Object finishReason = candidates.get(0).get("finishReason");
+            throw new RuntimeException("Gemini trả về content null. finishReason: " + finishReason);
+        }
         List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
-        String rawText = (String) parts.get(0).get("text");
 
-        // Làm sạch nếu vẫn còn markdown fence
+        // Tìm part chứa text output thực sự (bỏ qua các 'thought' parts của thinking model)
+        // Thinking model (gemini-2.5-*) có thể có: [{"thought": true, "text": "..."}, {"text": "JSON"}]
+        String rawText = null;
+        for (Map<String, Object> part : parts) {
+            Boolean isThought = (Boolean) part.get("thought");
+            if (Boolean.TRUE.equals(isThought)) continue; // Bỏ qua thought part
+            rawText = (String) part.get("text");
+            if (rawText != null && !rawText.isBlank()) break;
+        }
+        if (rawText == null || rawText.isBlank()) {
+            throw new RuntimeException("Gemini không trả về text output (tất cả parts đều là thought hoặc rỗng).");
+        }
+
+        // Làm sạch markdown fence nếu có
         String sanitized = rawText.trim();
         if (sanitized.contains("```")) {
             int first = sanitized.indexOf("```");
@@ -273,9 +559,18 @@ public class GeminiService {
                 sanitized = inner.trim();
             }
         }
-        log.info("[Gemini] JSON từ AI: {}", sanitized);
 
-        // Thử sửa lỗi JSON nếu bị cắt ngang (do giới hạn max_output_tokens)
+        // Trích xuất JSON array (bỏ qua text thừa trước/sau)
+        int arrayStart = sanitized.indexOf('[');
+        int arrayEnd   = sanitized.lastIndexOf(']');
+        if (arrayStart != -1 && arrayEnd != -1 && arrayEnd > arrayStart) {
+            sanitized = sanitized.substring(arrayStart, arrayEnd + 1);
+        }
+
+        log.info("[Gemini] JSON từ AI (500 ký tự đầu): {}",
+            sanitized.length() > 500 ? sanitized.substring(0, 500) + "..." : sanitized);
+
+        // Thử sửa lỗi JSON nếu bị cắt ngang
         String repairedJson = repairTruncatedJson(sanitized);
 
         // Parse JSON array thành List<Question>
@@ -284,7 +579,7 @@ public class GeminiService {
             rawList = mapper.readValue(repairedJson, new TypeReference<>() {});
         } catch (Exception e) {
             log.error("[Gemini] Lỗi parse JSON sau khi repair. Nội dung: {}", repairedJson);
-            throw new RuntimeException("AI trả về định dạng không hợp lệ. Vui lòng thử lại.");
+            throw new RuntimeException("Gemini trả về định dạng không hợp lệ: " + e.getMessage());
         }
 
         List<Question> questions = new ArrayList<>();

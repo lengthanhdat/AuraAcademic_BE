@@ -1,132 +1,134 @@
 package com.auracademic.backend.controller;
 
-import com.auracademic.backend.dto.LoginRequest;
-import com.auracademic.backend.dto.RegisterRequest;
-import com.auracademic.backend.model.User;
-import com.auracademic.backend.repository.UserRepository;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.auracademic.backend.dto.*;
+import com.auracademic.backend.service.AuthService;
+import com.auracademic.backend.util.ClientInfoUtil;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.HashMap;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/api/auth")
-@CrossOrigin(origins = "http://localhost:3000")
 public class AuthController {
 
-    @Autowired
-    private UserRepository userRepository;
+    private final AuthService authService;
 
-    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    public AuthController(AuthService authService) {
+        this.authService = authService;
+    }
 
+    // ─── Register ─────────────────────────────────────────────────────────────
+
+    /** POST /api/auth/register */
     @PostMapping("/register")
-    public ResponseEntity<?> register(@RequestBody RegisterRequest request) {
-        if (userRepository.findByEmail(request.getEmail()) != null) {
-            Map<String, String> response = new HashMap<>();
-            response.put("error", "Email đã tồn tại");
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
-        }
-
-        User newUser = new User();
-        newUser.setFullName(request.getFullName());
-        newUser.setEmail(request.getEmail());
-        newUser.setPassword(passwordEncoder.encode(request.getPassword())); // Hash mat khau truoc khi luu
-        newUser.setRole(request.getRole() != null ? request.getRole() : "student");
-        
-        userRepository.save(newUser);
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("message", "Đăng ký thành công");
-        response.put("user", newUser);
-        return ResponseEntity.ok(response);
+    public ResponseEntity<Map<String, String>> register(
+            @Valid @RequestBody RegisterRequest request,
+            HttpServletRequest httpRequest) {
+        authService.register(request, getClientIp(httpRequest));
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(Map.of("message", "Đăng ký thành công. Vui lòng kiểm tra email để xác thực tài khoản."));
     }
 
+    // ─── Login ────────────────────────────────────────────────────────────────
+
+    /** POST /api/auth/login */
     @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody LoginRequest request) {
-        User user = userRepository.findByEmail(request.getEmail());
-        
-        // Ho tro migration: neu mat khau cu la plaintext, tu dong bam lai
-        boolean passwordMatches = false;
-        if (user != null) {
-            String stored = user.getPassword();
-            if (stored != null && stored.startsWith("$2a$")) {
-                // Mat khau da duoc bam boi BCrypt
-                passwordMatches = passwordEncoder.matches(request.getPassword(), stored);
-            } else {
-                // Mat khau cu chua duoc bam (plaintext) - so sanh truc tiep va tu dong bam lai
-                passwordMatches = request.getPassword().equals(stored);
-                if (passwordMatches) {
-                    user.setPassword(passwordEncoder.encode(request.getPassword()));
-                    userRepository.save(user);
-                }
-            }
-        }
-        if (!passwordMatches) {
-            Map<String, String> response = new HashMap<>();
-            response.put("error", "Email hoac mat khau khong chinh xac");
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
-        }
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("message", "Dang nhap thanh cong");
-        response.put("user", user);
+    public ResponseEntity<AuthResponse> login(
+            @Valid @RequestBody LoginRequest request,
+            HttpServletRequest httpRequest) {
+        AuthResponse response = authService.login(request, getClientIp(httpRequest),
+                getClientDevice(httpRequest));
         return ResponseEntity.ok(response);
     }
 
-    @PutMapping("/profile/{id}")
-    public ResponseEntity<?> updateProfile(@PathVariable String id, @RequestBody Map<String, String> body) {
-        return userRepository.findById(id).map(user -> {
-            if (body.containsKey("fullName") && !body.get("fullName").isBlank()) {
-                user.setFullName(body.get("fullName"));
-            }
-            if (body.containsKey("studentId")) {
-                user.setStudentId(body.get("studentId"));
-            }
-            if (body.containsKey("phoneNumber")) {
-                user.setPhoneNumber(body.get("phoneNumber"));
-            }
-            if (body.containsKey("birthDate")) {
-                user.setBirthDate(body.get("birthDate"));
-            }
-            if (body.containsKey("gender")) {
-                user.setGender(body.get("gender"));
-            }
-            if (body.containsKey("title")) {
-                user.setTitle(body.get("title"));
-            }
-            if (body.containsKey("department")) {
-                user.setDepartment(body.get("department"));
-            }
-            if (body.containsKey("workplace")) {
-                user.setWorkplace(body.get("workplace"));
-            }
-            if (body.containsKey("schedule")) {
-                user.setSchedule(body.get("schedule"));
-            }
-            userRepository.save(user);
-            user.setPassword("[HIDDEN]");
-            return ResponseEntity.ok(user);
-        }).orElse(ResponseEntity.notFound().build());
+    // ─── Refresh Token ────────────────────────────────────────────────────────
+
+    /** POST /api/auth/refresh */
+    @PostMapping("/refresh")
+    public ResponseEntity<AuthResponse> refresh(
+            @Valid @RequestBody RefreshTokenRequest request,
+            HttpServletRequest httpRequest) {
+        return ResponseEntity.ok(authService.refreshToken(
+                request.getRefreshToken(),
+                getClientIp(httpRequest),
+                getClientDevice(httpRequest)));
     }
 
-    @PutMapping("/change-password/{id}")
-    public ResponseEntity<?> changePassword(@PathVariable String id, @RequestBody Map<String, String> body) {
-        String currentPassword = body.get("currentPassword");
-        String newPassword = body.get("newPassword");
-        if (currentPassword == null || newPassword == null) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Thieu du lieu"));
-        }
-        return userRepository.findById(id).map(user -> {
-            if (!passwordEncoder.matches(currentPassword, user.getPassword())) {
-                return ResponseEntity.status(401).body(Map.of("error", "Mat khau hien tai khong dung"));
-            }
-            user.setPassword(passwordEncoder.encode(newPassword));
-            userRepository.save(user);
-            return ResponseEntity.ok(Map.of("message", "Doi mat khau thanh cong"));
-        }).orElse(ResponseEntity.notFound().build());
+    // ─── Logout ───────────────────────────────────────────────────────────────
+
+    /** POST /api/auth/logout */
+    @PostMapping("/logout")
+    public ResponseEntity<Map<String, String>> logout(
+            @Valid @RequestBody RefreshTokenRequest request,
+            HttpServletRequest httpRequest,
+            @RequestAttribute(required = false) String currentUserId) {
+        authService.logout(request.getRefreshToken(), currentUserId, getClientIp(httpRequest));
+        return ResponseEntity.ok(Map.of("message", "Đăng xuất thành công"));
+    }
+
+    // ─── Email Verification ───────────────────────────────────────────────────
+
+    /** GET /api/auth/verify-email?token=... */
+    @PostMapping("/verify-email")
+    public ResponseEntity<Map<String, String>> verifyEmail(@RequestBody Map<String, String> request) {
+        authService.verifyEmail(request.get("email"), request.get("token"));
+        return ResponseEntity.ok(Map.of("message", "Xác thực email thành công. Bạn có thể đăng nhập ngay bây giờ."));
+    }
+
+    /** POST /api/auth/resend-verification */
+    @PostMapping("/resend-verification")
+    public ResponseEntity<Map<String, String>> resendVerification(@Valid @RequestBody ForgotPasswordRequest request) {
+        authService.resendVerification(request.getEmail());
+        return ResponseEntity.ok(Map.of("message", "Email xác thực đã được gửi lại"));
+    }
+
+    // ─── Forgot / Reset Password ──────────────────────────────────────────────
+
+    /** POST /api/auth/forgot-password */
+    @PostMapping("/forgot-password")
+    public ResponseEntity<Map<String, String>> forgotPassword(
+            @Valid @RequestBody ForgotPasswordRequest request,
+            HttpServletRequest httpRequest) {
+        authService.forgotPassword(request.getEmail(), getClientIp(httpRequest));
+        // Luôn trả OK để tránh user enumeration
+        return ResponseEntity.ok(Map.of("message", "Link đặt lại mật khẩu đã được gửi."));
+    }
+
+    /** POST /api/auth/reset-password */
+    @PostMapping("/reset-password")
+    public ResponseEntity<Map<String, String>> resetPassword(
+            @Valid @RequestBody ResetPasswordRequest request,
+            HttpServletRequest httpRequest) {
+        authService.resetPassword(request, getClientIp(httpRequest));
+        return ResponseEntity.ok(Map.of("message", "Mật khẩu đã được đặt lại thành công"));
+    }
+
+    // ─── Google OAuth2 ────────────────────────────────────────────────────────
+
+    /** POST /api/auth/google */
+    @PostMapping("/google")
+    public ResponseEntity<AuthResponse> googleLogin(
+            @Valid @RequestBody GoogleLoginRequest request,
+            HttpServletRequest httpRequest) {
+        AuthResponse response = authService.loginWithGoogle(
+                request.getIdToken(),
+                getClientIp(httpRequest),
+                getClientDevice(httpRequest));
+        return ResponseEntity.ok(response);
+    }
+
+    // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    private String getClientIp(HttpServletRequest request) {
+        return ClientInfoUtil.getClientIp(request);
+    }
+
+    private String getClientDevice(HttpServletRequest request) {
+        return ClientInfoUtil.getClientDevice(request);
     }
 }
