@@ -214,6 +214,9 @@ public class LiteLlmService {
      */
     public Map<String, Object> checkHealth() {
         try {
+            if (proxyUrl.contains("generativelanguage.googleapis.com")) {
+                return Map.of("ok", true, "proxy", proxyUrl, "msg", "Sử dụng API Gemini trực tiếp (Local Mode)");
+            }
             HttpHeaders headers = new HttpHeaders();
             headers.setBearerAuth(masterKey);
             String healthUrl = proxyUrl + "/health";
@@ -243,7 +246,9 @@ public class LiteLlmService {
 
     /** Gọi LiteLLM và trả về raw text (không parse Question) */
     private String callLiteLlmRaw(String prompt, String model) throws Exception {
-        String endpoint = proxyUrl + "/v1/chat/completions";
+        String endpoint = proxyUrl.contains("generativelanguage.googleapis.com") 
+            ? proxyUrl + "/chat/completions" 
+            : proxyUrl + "/v1/chat/completions";
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -268,7 +273,9 @@ public class LiteLlmService {
     /** Gọi LiteLLM với hình ảnh (OpenAI vision format — LiteLLM tự chuyển sang Gemini/Claude Vision) */
     @SuppressWarnings("unchecked")
     private String callLiteLlmRawWithImages(String prompt, List<String> images, String model) throws Exception {
-        String endpoint = proxyUrl + "/v1/chat/completions";
+        String endpoint = proxyUrl.contains("generativelanguage.googleapis.com") 
+            ? proxyUrl + "/chat/completions" 
+            : proxyUrl + "/v1/chat/completions";
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
