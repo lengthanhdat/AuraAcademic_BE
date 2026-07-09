@@ -77,8 +77,8 @@ jobs:
             APP_CORS_ALLOWED_ORIGINS=${{ secrets.CORS_ORIGINS }}
             LITELLM_PROXY_URL=http://${{ secrets.AI_EC2_PRIVATE_IP }}:4000
             LITELLM_PROXY_KEY=${{ secrets.LITELLM_MASTER_KEY }}
-            LITELLM_MODEL_MAIN=gemini-1.5-flash
-            LITELLM_MODEL_VISION=gemini-1.5-flash
+            LITELLM_MODEL_MAIN=main-ai
+            LITELLM_MODEL_VISION=vision-ai
 
       # ── 7. Deploy lên ECS, chờ healthy ───────────────────
       - name: Deploy to ECS
